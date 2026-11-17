@@ -791,6 +791,34 @@ def find_and_prepare_year_clip(
     raise RuntimeError(f"Không thể tải và cắt video có mặt nhân vật cho năm {year}.")
 
 
+def _are_clips_visually_distinct(thumb_path_1: str, thumb_path_2: str, max_hist_corr: float = 0.78) -> bool:
+    """
+    Compare two clip thumbnails using HSV color histogram correlation + structural diff
+    to ensure 2 consecutive scenes of the same year do NOT look like the same static shot.
+    """
+    try:
+        import cv2
+        from face_engine import read_image_unicode
+
+        img1 = read_image_unicode(thumb_path_1)
+        img2 = read_image_unicode(thumb_path_2)
+        if img1 is None or img2 is None:
+            return True
+
+        hsv1 = cv2.cvtColor(cv2.resize(img1, (160, 90)), cv2.COLOR_BGR2HSV)
+        hsv2 = cv2.cvtColor(cv2.resize(img2, (160, 90)), cv2.COLOR_BGR2HSV)
+
+        hist1 = cv2.calcHist([hsv1], [0, 1], None, [30, 32], [0, 180, 0, 256])
+        hist2 = cv2.calcHist([hsv2], [0, 1], None, [30, 32], [0, 180, 0, 256])
+        cv2.normalize(hist1, hist1, 0, 1, cv2.NORM_MINMAX)
+        cv2.normalize(hist2, hist2, 0, 1, cv2.NORM_MINMAX)
+
+        corr = float(cv2.compareHist(hist1, hist2, cv2.HISTCMP_CORREL))
+        return corr <= max_hist_corr
+    except Exception:
+        return True
+
+
 def create_second_scene_for_year(
     existing_yc: Dict[str, Any],
     celeb_name: str,
@@ -802,21 +830,25 @@ def create_second_scene_for_year(
     max_clip_duration: float = 5.4,
 ) -> Optional[Dict[str, Any]]:
     """
-    Create a 2nd consecutive scene (`Cảnh 2`) for the same year when a celebrity has fewer years
-    or when we want to enrich a prominent year with 2 consecutive scenes:
-    1. First tries a different verified face segment (`segment_index + 1`) from the same year's raw video
-       or a 2nd distinct YouTube video from that same year (`candidate_index + 1`).
+    Create a 2nd consecutive scene (`Cảnh 2`) for the same year (ONLY used for middle/later years,
+    never for the first year clip):
+    1. Priority 1: Pick a 2nd distinct YouTube video of that same year (`video_id != existing_yc['video_id']`).
+    2. Priority 2: Pick a non-overlapping segment from the same video ONLY if it is at least 12 seconds
+       away AND visually distinct (different camera angle/background via histogram check).
     """
     yr = int(existing_yc["year"])
     req_yr = int(existing_yc.get("requested_year") or yr)
     year_dir = os.path.join(project_dir, f"year_{req_yr}")
     os.makedirs(year_dir, exist_ok=True)
+    existing_thumb = existing_yc.get("thumb_path") or ""
 
-    # Option A: Try picking a 2nd distinct YouTube video of the same year first if available
+    # Option A: Try picking a 2nd distinct YouTube video of the same year first
     cands = existing_yc.get("candidates") or []
-    explicit_cands = [c for c in cands if c.get("has_explicit_year")]
-    if len(explicit_cands) >= 2:
+    other_cands = [c for c in cands if c.get("video_id") != existing_yc.get("video_id") and c.get("has_explicit_year")]
+    if other_cands:
         try:
+            forbid_ids = set(used_video_ids or set())
+            forbid_ids.add(existing_yc.get("video_id", ""))
             second_vid_yc = find_and_prepare_year_clip(
                 celeb_name=celeb_name,
                 year=yr,
@@ -829,17 +861,20 @@ def create_second_scene_for_year(
                 candidate_index=int(existing_yc.get("candidate_index", 0)) + 1,
                 segment_index=0,
                 year_window=(yr - 1, yr + 1),
-                used_video_ids=used_video_ids,
+                used_video_ids=forbid_ids,
                 scene_index=2,
             )
-            if float(second_vid_yc.get("face_similarity", 0)) >= 0.25:
+            if (
+                second_vid_yc.get("video_id") != existing_yc.get("video_id")
+                and float(second_vid_yc.get("face_similarity", 0)) >= 0.25
+            ):
                 second_vid_yc["year"] = yr
                 second_vid_yc["status"] = "ready"
                 return second_vid_yc
         except Exception:
             pass
 
-    # Option B: Cut the 2nd non-overlapping verified face segment from the existing raw video
+    # Option B: Cut a 2nd segment from the existing raw video ONLY if >= 12s apart AND visually distinct shot
     raw_path = existing_yc.get("raw_path")
     segments = existing_yc.get("segments") or []
     curr_seg_idx = int(existing_yc.get("segment_index", 0))
@@ -847,9 +882,10 @@ def create_second_scene_for_year(
         for cand_seg_idx, seg in enumerate(segments):
             if cand_seg_idx == curr_seg_idx:
                 continue
-            if abs(float(seg["start_sec"]) - float(existing_yc.get("rel_start_sec", 0))) < 3.8:
+            # Must be at least 12.0 seconds away so it never overlaps or repeats the same moment
+            if abs(float(seg["start_sec"]) - float(existing_yc.get("rel_start_sec", 0))) < 12.0:
                 continue
-            if float(seg.get("similarity", 0)) < 0.24:
+            if float(seg.get("similarity", 0)) < 0.25:
                 continue
 
             rel_start = float(seg["start_sec"])
@@ -860,6 +896,16 @@ def create_second_scene_for_year(
             thumb_path = os.path.join(year_dir, f"thumb_{yr}_{vid}_sc2_{ts}.jpg")
             if cut_video_clip(raw_path, out_clip, start_sec=rel_start, duration_sec=seg_dur, keep_audio=False):
                 extract_thumbnail(out_clip, thumb_path, time_sec=seg_dur * 0.4)
+                # Verify visual distinctness against Scene 1
+                if existing_thumb and os.path.exists(existing_thumb):
+                    if not _are_clips_visually_distinct(existing_thumb, thumb_path):
+                        try:
+                            os.remove(out_clip)
+                            os.remove(thumb_path)
+                        except Exception:
+                            pass
+                        continue
+
                 actual_dur = get_video_duration(out_clip) or seg_dur
                 sc2 = dict(existing_yc)
                 sc2["clip_id"] = f"{yr}_sc2_{ts}"

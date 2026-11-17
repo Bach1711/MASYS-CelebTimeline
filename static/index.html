@@ -854,14 +854,15 @@
           >
             🔄 Đổi video
           </button>
+          ${slotIdx > 0 ? `
           <button
             type="button"
             onclick="addSecondSceneForYear(${yc.year}, ${slotIdx})"
             class="py-1.5 px-2 rounded-lg bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 font-bold text-xs transition cursor-pointer"
-            title="Thêm 1 cảnh liên tiếp nữa cho cùng năm ${yc.year} (1 năm 2 cảnh liên tiếp)"
+            title="Thêm 1 cảnh liên tiếp khác biệt cho cùng năm ${yc.year} (1 năm 2 cảnh liên tiếp)"
           >
             ➕
-          </button>
+          </button>` : ''}
           ${totalYearClips > 4 ? `
           <button
             type="button"

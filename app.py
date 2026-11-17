@@ -468,12 +468,13 @@ def _run_full_pipeline_worker(project_id: str):
             )
         _save_project_state(project_id)
 
-        # Rank ready clips by richness (number of verified segments + candidates + face similarity)
+        # NEVER double the very first year clip (`ready_clips[0]`) so TikTok viewers immediately see the years progress!
+        eligible_for_double = ready_clips[1:] if len(ready_clips) > 1 else []
         ranked_for_double = sorted(
-            ready_clips,
+            eligible_for_double,
             key=lambda c: (
+                len([x for x in (c.get("candidates") or []) if x.get("has_explicit_year") and x.get("video_id") != c.get("video_id")]) >= 1,
                 len(c.get("segments") or []) >= 2,
-                len([x for x in (c.get("candidates") or []) if x.get("has_explicit_year")]) >= 2,
                 float(c.get("face_similarity") or 0),
             ),
             reverse=True,
@@ -638,6 +639,11 @@ def api_swap_year(project_id: str, req: SwapYearClipRequest):
 
     # Action: Add a 2nd consecutive scene for this year ("1 năm 2 cảnh liên tiếp")
     if req.action == "add_scene":
+        if target_idx == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Cảnh năm đầu tiên luôn phải là 1 năm - 1 cảnh duy nhất để giữ chân người xem TikTok!",
+            )
         other_used_ids = {yc.get("video_id") for yc in year_clips if yc.get("video_id")}
         sc2 = create_second_scene_for_year(
             existing_yc=current_yc,
@@ -648,7 +654,7 @@ def api_swap_year(project_id: str, req: SwapYearClipRequest):
             used_video_ids=other_used_ids,
         )
         if not sc2:
-            raise HTTPException(status_code=400, detail=f"Chưa tìm thêm được cảnh thứ 2 cho năm {current_yc['year']}.")
+            raise HTTPException(status_code=400, detail=f"Chưa tìm thêm được cảnh thứ 2 khác biệt cho năm {current_yc['year']}.")
         with PROJECTS_LOCK:
             PROJECTS[project_id]["year_clips"].insert(target_idx + 1, sc2)
             PROJECTS[project_id]["years"] = [int(x["year"]) for x in PROJECTS[project_id]["year_clips"]]
