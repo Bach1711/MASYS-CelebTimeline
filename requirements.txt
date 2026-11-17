@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+requests
+yt-dlp
+youtube-transcript-api
+opencv-python
+numpy
+Pillow
+python-multipart

@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MASYS CelebTimeline — Bảng Theo Dõi Tiến Độ & Phản Hồi (Linear Tracker)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-100 text-slate-800 p-6 md:p-8 min-h-screen font-sans">
+  <div class="max-w-6xl mx-auto space-y-6">
+
+    <!-- Header -->
+    <div class="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex items-center justify-between gap-4 flex-wrap">
+      <div class="flex items-center gap-3.5">
+        <span class="px-3.5 py-2 rounded-xl bg-amber-400 text-slate-950 font-black text-base border border-amber-500 shadow-xs">
+          MASYS
+        </span>
+        <div>
+          <div class="flex items-center gap-2.5">
+            <h1 class="font-bold text-xl text-slate-900">MASYS CelebTimeline — Tiến Độ & Nghiệm Thu (Tracker)</h1>
+            <a
+              href="https://linear.app/conducdaudan/project/masys-celebtimeline-266feb2da97f"
+              target="_blank"
+              class="px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 text-xs font-semibold hover:bg-indigo-100"
+            >
+              🔗 Linear: P-CON-10 ↗
+            </a>
+          </div>
+          <p class="text-xs text-slate-500 mt-0.5">
+            Đồng bộ trực tiếp với Linear MCP &bull; Hỗ trợ ghi chú Feedback từng Ticket &amp; Feedback chung vào <code class="font-mono text-slate-700">feedback.json</code>
+          </p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2.5">
+        <button
+          type="button"
+          onclick="saveFeedbackForAI()"
+          class="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold shadow-sm transition cursor-pointer"
+        >
+          💾 Lưu Feedback cho AI (feedback.json)
+        </button>
+      </div>
+    </div>
+
+    <!-- Save status toast -->
+    <div id="saveBanner" class="hidden bg-emerald-50 border border-emerald-300 text-emerald-900 rounded-xl px-4 py-3 text-xs font-semibold flex items-center justify-between">
+      <span id="saveBannerText">✔ Đã lưu dữ liệu phản hồi vào feedback.json!</span>
+      <button type="button" onclick="document.getElementById('saveBanner').classList.add('hidden')" class="text-emerald-700 font-bold">✕</button>
+    </div>
+
+    <!-- Overall Progress Card -->
+    <div class="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
+      <div class="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 class="font-bold text-base text-slate-900">📊 Tiến độ Tổng thể Dự án</h2>
+          <p class="text-xs text-slate-500">Toàn bộ các Tickets được chia theo đúng kiến trúc trong <code class="font-mono">SPEC.md</code> và <code class="font-mono">mockups.html</code></p>
+        </div>
+        <div class="flex items-center gap-2 text-xs font-bold">
+          <span id="statTodo" class="px-3 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-300">Todo: 0</span>
+          <span id="statInProgress" class="px-3 py-1 rounded-full bg-blue-100 text-blue-800 border border-blue-200">In Progress: 0</span>
+          <span id="statReview" class="px-3 py-1 rounded-full bg-amber-100 text-amber-800 border border-amber-200">Review: 0</span>
+          <span id="statDone" class="px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">Done: 5</span>
+        </div>
+      </div>
+
+      <div class="w-full bg-slate-200 h-3.5 rounded-full overflow-hidden">
+        <div id="overallProgressBar" class="bg-emerald-500 h-full transition-all duration-300" style="width: 100%"></div>
+      </div>
+      <div class="flex justify-between text-xs text-slate-600 font-semibold">
+        <span id="overallProgressLabel">Hoàn thành: 100% (5/5 Tickets)</span>
+        <span>Chuẩn nghiệm thu: Khung dọc 9:16 (1080×1920) • Giữ tiếng bản tin đầu • Tắt tiếng các năm</span>
+      </div>
+    </div>
+
+    <!-- General Project Feedback (Level 2) -->
+    <div class="bg-white border-2 border-amber-300 rounded-2xl p-6 shadow-sm space-y-3">
+      <div class="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <h2 class="font-bold text-base text-slate-900">📝 Góp ý Chung Toàn Dự Án (General Feedback)</h2>
+          <p class="text-xs text-slate-500">
+            Nhập các nhận xét tổng thể, thay đổi thiết kế hoặc yêu cầu bổ sung cho toàn hệ thống. Sau khi lưu, chỉ cần nhắn AI: <em>"Đọc feedback trong file và sửa code giúp tôi"</em>.
+          </p>
+        </div>
+        <span class="px-2.5 py-1 rounded-lg bg-amber-100 text-amber-900 font-bold text-xs">Cấp độ Toàn dự án</span>
+      </div>
+      <textarea
+        id="generalFeedbackInput"
+        rows="3"
+        placeholder="Nhập góp ý chung cho toàn bộ ứng dụng MASYS CelebTimeline tại đây..."
+        class="w-full p-3 rounded-xl bg-slate-50 border border-slate-300 text-sm text-slate-900 focus:outline-none focus:border-blue-500 focus:bg-white"
+      ></textarea>
+    </div>
+
+    <!-- Tickets List -->
+    <div id="ticketsContainer" class="space-y-4"></div>
+
+  </div>
+
+  <script>
+    const TICKETS_DATA = [
+      {
+        id: "CON-202",
+        url: "https://linear.app/conducdaudan/issue/CON-202/core-ke-thua-module-tra-cuu-wikipedia-and-nhan-dien-khuon-mat-ai-celeb",
+        title: "[Core] Kế thừa Module Tra cứu Wikipedia & Nhận diện Khuôn mặt AI (celeb_service.py, face_engine.py)",
+        priority: "High",
+        status: "Done",
+        module: "celeb_service.py, face_engine.py",
+        description: "Truy vấn Wikipedia lấy năm sinh/mất, gợi ý 8–10 mốc năm tiêu biểu, tải ảnh chân dung mẫu và trích xuất Face Embedding 128 chiều bằng OpenCV YuNet + SFace.",
+        dod: [
+          "Truy vấn Wikipedia trả về đúng năm sinh, năm mất và danh sách 8–10 mốc năm sự nghiệp tiêu biểu.",
+          "Tải thành công ảnh chân dung mẫu và trích xuất được Face Embedding bằng OpenCV SFace.",
+          "Hàm find_best_segments quét video và trả về danh sách các phân đoạn 3–4s không chồng lấn có mặt nhân vật chính rõ nét, liên tục."
+        ]
+      },
+      {
+        id: "CON-203",
+        url: "https://linear.app/conducdaudan/issue/CON-203/pipeline-tu-djong-tim-kiem-youtube-do-phu-dje-cat-ban-tin-and-cat",
+        title: "[Pipeline] Tự động Tìm kiếm YouTube, Dò phụ đề cắt Bản tin & Cắt Video Năm theo Mặt AI (youtube_pipeline.py)",
+        priority: "High",
+        status: "Done",
+        module: "youtube_pipeline.py",
+        description: "Tìm kiếm bản tin qua đời trên YouTube, đọc YouTube Timed Transcript để cắt câu dẫn 8–15s giữ tiếng gốc MC; tìm và cắt các đoạn video năm 3–4s theo bộ lọc khuôn mặt AI (tắt tiếng gốc).",
+        dod: [
+          "Tự động tìm và cắt đoạn bản tin mở đầu dài 8–15 giây, giữ nguyên tiếng gốc MC.",
+          "Tự động tìm và cắt các đoạn video theo từng mốc năm dài 3–4 giây có mặt nhân vật chính, đã tắt tiếng gốc.",
+          "Lưu trữ danh sách phân đoạn (segments) và danh sách ứng viên (candidates) để hỗ trợ đổi cảnh/đổi video nhanh."
+        ]
+      },
+      {
+        id: "CON-204",
+        url: "https://linear.app/conducdaudan/issue/CON-204/renderer-chuan-hoa-khung-doc-916-nhan-nam-vang-vien-djen-and-luoc-bo",
+        title: "[Renderer] Chuẩn hóa Khung dọc 9:16, Nhãn Năm Vàng Viền Đen & Lược bỏ hoàn toàn Nhạc nền (renderer.py)",
+        priority: "Urgent",
+        status: "Done",
+        module: "renderer.py",
+        description: "Lược bỏ hoàn toàn phần tạo và trộn nhạc nền (BGM). Chuẩn hóa toàn bộ đoạn cắt về khung dọc 1080×1920 (9:16, 30fps), giữ tiếng gốc ở đoạn bản tin mở đầu, tắt tiếng hoàn toàn ở các đoạn năm và gắn nhãn số năm màu vàng (#FFE600) viền đen đậm.",
+        dod: [
+          "Lược bỏ hoàn toàn hàm tạo nhạc nền mặc định và bộ lọc trộn nhạc nền (BGM) trong renderer.py.",
+          "Video xuất ra có độ phân giải 1080×1920 (9:16, 30fps), đoạn bản tin đầu giữ nguyên tiếng gốc MC, các đoạn năm phía sau tắt tiếng hoàn toàn.",
+          "Nhãn số năm màu vàng (#FFE600) viền đen đậm hiển thị sắc nét trên các đoạn video năm."
+        ]
+      },
+      {
+        id: "CON-205",
+        url: "https://linear.app/conducdaudan/issue/CON-205/backend-api-hop-thoai-chon-thu-muc-luu-video-djau-ra-windows-folder",
+        title: "[Backend API] Hộp thoại Chọn Thư mục Lưu Video Đầu ra (Windows Folder Dialog) & Xuất Trực tiếp MP4 (app.py)",
+        priority: "Urgent",
+        status: "Done",
+        module: "app.py",
+        description: "Xóa các endpoint nhạc nền, thêm API /api/pick-folder mở hộp thoại chọn thư mục gốc của Windows và cập nhật /api/projects/{project_id}/render để xuất trực tiếp file MP4 thành phẩm vào đúng thư mục người dùng đã chọn.",
+        dod: [
+          "Bỏ hoàn toàn các endpoint và tham số liên quan đến nhạc nền (BGM) trong app.py.",
+          "API /api/pick-folder mở được hộp thoại chọn thư mục Windows và trả về đường dẫn đã chọn.",
+          "API /api/projects/{project_id}/render lưu trực tiếp file .mp4 thành phẩm vào đúng output_folder người dùng chỉ định.",
+          "Hỗ trợ phục vụ và lưu dữ liệu tracker.html / feedback.json."
+        ]
+      },
+      {
+        id: "CON-206",
+        url: "https://linear.app/conducdaudan/issue/CON-206/frontend-ui-giao-dien-bang-luoi-storyboard-tong-sang-light-mode-chuan",
+        title: "[Frontend UI] Giao diện Bảng Lưới Storyboard Tông Sáng (Light Mode) chuẩn mockups.html (static/index.html)",
+        priority: "Urgent",
+        status: "Done",
+        module: "static/index.html",
+        description: "Thiết kế lại toàn bộ giao diện sang Bảng Lưới Storyboard Tông Sáng (Light Mode) chuẩn mockups.html: Thanh điều khiển trên cùng (Tên nhân vật, Thư mục lưu video + nút Chọn, nút 1. Tạo Video, nút 2. Xuất MP4), Bảng lưới 4 cột phát trực tiếp <video> từng đoạn và bỏ hoàn toàn phần chọn nhạc nền.",
+        dod: [
+          "Giao diện static/index.html sử dụng Tông Sáng (Light Mode) và bố cục khớp 100% với mockups.html.",
+          "Thanh điều khiển trên cùng có đủ: Ô nhập Tên nhân vật, Ô Thư mục lưu video + nút 📂 Chọn..., nút 🚀 1. Tạo Video (Tìm & Cắt) và nút 💾 2. Xuất MP4.",
+          "Bảng lưới Storyboard 4 cột hiển thị trực tiếp <video> cho ô Bản tin mở đầu (có tiếng) và các ô Năm (autoplay loop muted, nhãn năm vàng viền đen, % AI).",
+          "Các nút 🔄 Đổi bản tin, ✂️ Chỉnh giây, ✨ Đổi cảnh, 🔄 Đổi video hoạt động thực tế với Backend API.",
+          "Đã loại bỏ hoàn toàn phần chọn/tải nhạc nền khỏi giao diện."
+        ]
+      }
+    ];
+
+    let feedbackState = {
+      general_feedback: "",
+      tickets: {}
+    };
+
+    function statusBadgeHtml(status) {
+      if (status === "Done") {
+        return `<span class="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 font-bold text-xs">✔ Done</span>`;
+      }
+      if (status === "In Progress") {
+        return `<span class="px-2.5 py-1 rounded-full bg-blue-100 text-blue-800 border border-blue-200 font-bold text-xs">⏳ In Progress</span>`;
+      }
+      if (status === "Review") {
+        return `<span class="px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 border border-amber-200 font-bold text-xs">🔍 Review</span>`;
+      }
+      return `<span class="px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-300 font-bold text-xs">📋 Todo</span>`;
+    }
+
+    function renderTickets() {
+      const container = document.getElementById("ticketsContainer");
+      container.innerHTML = "";
+
+      let counts = { Todo: 0, "In Progress": 0, Review: 0, Done: 0 };
+      TICKETS_DATA.forEach(t => {
+        counts[t.status] = (counts[t.status] || 0) + 1;
+        const tf = feedbackState.tickets[t.id] || { review_status: "approved", feedback: "" };
+
+        const dodHtml = t.dod.map((item, idx) => `
+          <label class="flex items-start gap-2.5 text-xs text-slate-700 cursor-pointer">
+            <input type="checkbox" checked class="mt-0.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
+            <span>${item}</span>
+          </label>
+        `).join("");
+
+        const card = document.createElement("div");
+        card.className = "bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4";
+        card.innerHTML = `
+          <div class="flex items-start justify-between gap-4 flex-wrap border-b border-slate-100 pb-3">
+            <div class="space-y-1">
+              <div class="flex items-center gap-2 flex-wrap">
+                <a href="${t.url}" target="_blank" class="px-2.5 py-0.5 rounded-md bg-slate-900 text-amber-400 font-mono font-bold text-xs hover:underline">
+                  ${t.id} ↗
+                </a>
+                <span class="px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-mono text-xs border border-slate-200">${t.module}</span>
+                <span class="px-2 py-0.5 rounded bg-rose-50 text-rose-700 font-semibold text-xs border border-rose-200">Ưu tiên: ${t.priority}</span>
+              </div>
+              <h3 class="font-bold text-base text-slate-900">${t.title}</h3>
+              <p class="text-xs text-slate-600">${t.description}</p>
+            </div>
+            <div class="flex items-center gap-2">
+              ${statusBadgeHtml(t.status)}
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <!-- DoD Checklist -->
+            <div class="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2">
+              <div class="text-xs font-bold text-slate-800">✅ Checklist Định nghĩa hoàn thành (DoD)</div>
+              <div class="space-y-1.5">
+                ${dodHtml}
+              </div>
+            </div>
+
+            <!-- Ticket-level Feedback -->
+            <div class="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2">
+              <div class="flex items-center justify-between">
+                <label class="text-xs font-bold text-slate-800">💬 Góp ý riêng cho Ticket ${t.id}</label>
+                <select
+                  id="reviewStatus_${t.id}"
+                  class="px-2 py-1 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-800"
+                >
+                  <option value="approved" ${tf.review_status === "approved" ? "selected" : ""}>✅ Đạt (Approved)</option>
+                  <option value="needs_revision" ${tf.review_status === "needs_revision" ? "selected" : ""}>🛠️ Cần sửa lại (Needs Revision)</option>
+                </select>
+              </div>
+              <textarea
+                id="ticketFeedback_${t.id}"
+                rows="3"
+                placeholder="Ghi chú lỗi hoặc yêu cầu chỉnh sửa cho ${t.id}..."
+                class="w-full p-2.5 rounded-lg bg-white border border-slate-300 text-xs text-slate-900 focus:outline-none focus:border-blue-500"
+              >${tf.feedback || ""}</textarea>
+            </div>
+          </div>
+        `;
+        container.appendChild(card);
+      });
+
+      const total = TICKETS_DATA.length;
+      const done = counts.Done || 0;
+      const pct = Math.round((done / total) * 100);
+      document.getElementById("statTodo").innerText = `Todo: ${counts.Todo || 0}`;
+      document.getElementById("statInProgress").innerText = `In Progress: ${counts["In Progress"] || 0}`;
+      document.getElementById("statReview").innerText = `Review: ${counts.Review || 0}`;
+      document.getElementById("statDone").innerText = `Done: ${done}`;
+      document.getElementById("overallProgressBar").style.width = `${pct}%`;
+      document.getElementById("overallProgressLabel").innerText = `Hoàn thành: ${pct}% (${done}/${total} Tickets)`;
+    }
+
+    function collectFeedbackPayload() {
+      const tickets = {};
+      TICKETS_DATA.forEach(t => {
+        const revEl = document.getElementById(`reviewStatus_${t.id}`);
+        const fbEl = document.getElementById(`ticketFeedback_${t.id}`);
+        tickets[t.id] = {
+          title: t.title,
+          status: t.status,
+          review_status: revEl ? revEl.value : "approved",
+          feedback: fbEl ? fbEl.value.trim() : ""
+        };
+      });
+      return {
+        project: "MASYS CelebTimeline",
+        linear_project_id: "P-CON-10",
+        updated_at: new Date().toISOString(),
+        general_feedback: document.getElementById("generalFeedbackInput").value.trim(),
+        tickets
+      };
+    }
+
+    async function saveFeedbackForAI() {
+      const payload = collectFeedbackPayload();
+      localStorage.setItem("masys_celeb_feedback", JSON.stringify(payload));
+
+      // 1. Try saving directly via Backend API (/api/feedback)
+      try {
+        const res = await fetch("/api/feedback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const banner = document.getElementById("saveBanner");
+          document.getElementById("saveBannerText").innerText =
+            `✔ Đã lưu trực tiếp vào ${data.path} lúc ${data.updated_at}! Bạn có thể nhắn AI đọc feedback ngay.`;
+          banner.classList.remove("hidden");
+          return;
+        }
+      } catch (e) {
+        // Fallback when opened as file:// without server running
+      }
+
+      // 2. Fallback: File System Access API or direct download of feedback.json
+      const jsonStr = JSON.stringify(payload, null, 2);
+      if (window.showSaveFilePicker) {
+        try {
+          const handle = await window.showSaveFilePicker({
+            suggestedName: "feedback.json",
+            types: [{ description: "JSON File", accept: { "application/json": [".json"] } }]
+          });
+          const writable = await handle.createWritable();
+          await writable.write(jsonStr);
+          await writable.close();
+          const banner = document.getElementById("saveBanner");
+          document.getElementById("saveBannerText").innerText = "✔ Đã lưu file feedback.json thành công!";
+          banner.classList.remove("hidden");
+          return;
+        } catch (err) {
+          // User cancelled picker
+        }
+      }
+
+      const blob = new Blob([jsonStr], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "feedback.json";
+      a.click();
+    }
+
+    async function loadExistingFeedback() {
+      try {
+        const res = await fetch("/api/feedback");
+        if (res.ok) {
+          const data = await res.json();
+          if (data) {
+            feedbackState = {
+              general_feedback: data.general_feedback || "",
+              tickets: data.tickets || {}
+            };
+          }
+        }
+      } catch (e) {
+        const saved = localStorage.getItem("masys_celeb_feedback");
+        if (saved) {
+          try {
+            feedbackState = JSON.parse(saved);
+          } catch (_) {}
+        }
+      }
+      document.getElementById("generalFeedbackInput").value = feedbackState.general_feedback || "";
+      renderTickets();
+    }
+
+    window.addEventListener("DOMContentLoaded", loadExistingFeedback);
+  </script>
+</body>
+</html>

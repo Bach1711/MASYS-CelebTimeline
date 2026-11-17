@@ -1,0 +1,1107 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MASYS CelebTimeline — Tự động sản xuất Video TikTok Bản tin & Hành trình Sự nghiệp</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .year-label-stroke {
+      color: #FFE600;
+      font-family: 'Arial Black', Impact, system-ui, sans-serif;
+      text-shadow:
+        -2px -2px 0 #000,
+         2px -2px 0 #000,
+        -2px  2px 0 #000,
+         2px  2px 0 #000,
+         0px  3px 6px rgba(0,0,0,0.65);
+    }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-800 p-6 md:p-8 min-h-screen font-sans">
+  <div class="max-w-6xl mx-auto bg-slate-50 border border-slate-200 rounded-2xl p-6 shadow-md space-y-4">
+
+    <!-- Top Header & Controls Bar -->
+    <div class="bg-white border border-slate-200 rounded-xl p-4 shadow-sm space-y-3">
+      <div class="flex items-center justify-between gap-4 flex-wrap">
+        <div class="flex items-center gap-3">
+          <span class="px-3 py-1.5 rounded-lg bg-amber-400 text-slate-950 font-black text-sm border border-amber-500 shadow-xs">
+            MASYS
+          </span>
+          <div>
+            <h1 class="font-bold text-lg text-slate-900 leading-tight">MASYS CelebTimeline</h1>
+            <p class="text-xs text-slate-500">Chuẩn khung dọc 9:16 TikTok • Giữ tiếng bản tin đầu • Tắt tiếng các năm</p>
+          </div>
+        </div>
+
+        <!-- Inputs: Name + Output Folder -->
+        <div class="flex items-center gap-3 flex-1 min-w-[300px] max-w-2xl flex-wrap sm:flex-nowrap">
+          <div class="flex-1 min-w-[190px]">
+            <label for="celebNameInput" class="block text-xs font-semibold text-slate-600 mb-1">1. Tên người nổi tiếng</label>
+            <div class="flex gap-1.5">
+              <input
+                id="celebNameInput"
+                type="text"
+                value="Catherine O'Hara"
+                placeholder="Ví dụ: Catherine O'Hara, Matthew Perry..."
+                onchange="onCelebNameChange()"
+                class="w-full px-3 py-2 rounded-lg bg-slate-50 border border-slate-300 text-slate-900 text-sm font-semibold focus:outline-none focus:border-blue-500 focus:bg-white transition"
+              />
+              <button
+                id="btnLookupCeleb"
+                type="button"
+                onclick="lookupCelebYears(true)"
+                class="px-2.5 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 text-xs font-semibold shrink-0 transition cursor-pointer"
+                title="Tra cứu Wikipedia để tự động lấy năm sinh/mất và gợi ý các mốc năm sự nghiệp của nhân vật này"
+              >
+                🔍 Tra năm
+              </button>
+            </div>
+          </div>
+          <div class="flex-1 min-w-[220px]">
+            <label for="outputFolderInput" class="block text-xs font-semibold text-slate-600 mb-1">2. Thư mục lưu video đầu ra</label>
+            <div class="flex gap-1.5">
+              <input
+                id="outputFolderInput"
+                type="text"
+                value="D:\TikTok_Videos\Output"
+                placeholder="D:\TikTok_Videos\Output"
+                class="w-full px-3 py-2 rounded-lg bg-slate-50 border border-slate-300 text-slate-700 text-sm font-mono focus:outline-none focus:border-blue-500 focus:bg-white transition"
+              />
+              <button
+                id="btnPickFolder"
+                type="button"
+                onclick="openFolderPickerModal()"
+                class="px-3 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 text-xs font-semibold shrink-0 transition cursor-pointer"
+                title="Chọn thư mục lưu video trên máy tính"
+              >
+                📂 Chọn...
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Main Action Buttons -->
+        <div class="flex items-center gap-2.5">
+          <button
+            id="btnStartPipeline"
+            type="button"
+            onclick="startPipeline()"
+            class="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-bold shadow-sm transition cursor-pointer"
+          >
+            🚀 1. Tạo Video (Tìm & Cắt)
+          </button>
+          <button
+            id="btnRenderFinal"
+            type="button"
+            onclick="renderFinalVideo()"
+            class="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-bold shadow-sm transition cursor-pointer"
+          >
+            <span id="btnRenderLabel">💾 2. Xuất MP4</span>
+            <span id="btnExportDuration"></span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Dynamic Celebrity Years Bar -->
+      <div class="pt-2.5 border-t border-slate-100 flex items-center justify-between gap-3 flex-wrap text-xs">
+        <div class="flex items-center gap-2.5">
+          <img
+            id="celebPortraitThumb"
+            src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='36' height='36'><rect width='100%' height='100%' fill='%23e2e8f0'/></svg>"
+            alt="AI Face"
+            class="w-7 h-7 rounded-full object-cover border border-amber-400 bg-slate-200 shrink-0"
+          />
+          <div>
+            <span class="font-bold text-slate-800" id="celebMetaName">Catherine O'Hara</span>
+            <span class="text-slate-500 ml-1" id="celebMetaSpan">(Tự động lấy mốc năm & thời lượng linh hoạt ~1 phút)</span>
+          </div>
+        </div>
+        <div class="flex items-center gap-2 flex-1 max-w-2xl">
+          <label for="yearsListInput" class="text-slate-600 font-semibold shrink-0">📅 Mốc năm (tự động theo nhân vật / sửa tùy ý):</label>
+          <input
+            id="yearsListInput"
+            type="text"
+            value=""
+            placeholder="Để trống để tự động chọn các mốc năm tiêu biểu của nhân vật..."
+            class="flex-1 px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-300 text-slate-800 font-mono text-xs focus:outline-none focus:border-blue-500 focus:bg-white"
+          />
+        </div>
+      </div>
+    </div>
+
+    <!-- Status Strip -->
+    <div class="space-y-2">
+      <div class="flex items-center justify-between px-1 text-xs flex-wrap gap-2">
+        <div class="flex items-center gap-2.5 flex-wrap">
+          <span
+            id="statusBadge"
+            class="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 font-semibold"
+          >
+            ✔ Sẵn sàng tạo video
+          </span>
+          <span id="statusText" class="text-slate-600">
+            Xem trực tiếp video từng đoạn trong bảng lưới bên dưới. Bấm <strong>✨ Đổi cảnh</strong>, <strong>🔄 Đổi video</strong> hoặc <strong>➕ Cảnh 2</strong> (1 năm 2 cảnh liên tiếp).
+          </span>
+        </div>
+        <span class="text-slate-600 font-medium">
+          ⏱️ Tổng thời lượng: <strong id="totalDurationDisplay" class="text-slate-900">0.0 giây</strong>
+        </span>
+      </div>
+
+      <!-- Progress Bar -->
+      <div id="progressBarWrap" class="hidden w-full bg-slate-200 h-2 rounded-full overflow-hidden">
+        <div id="progressBarFill" class="bg-blue-600 h-full transition-all duration-300" style="width: 0%"></div>
+      </div>
+    </div>
+
+    <!-- Exported MP4 Notification Banner -->
+    <div
+      id="exportedBanner"
+      class="hidden bg-emerald-50 border border-emerald-300 rounded-xl p-4 flex items-center justify-between gap-4 flex-wrap"
+    >
+      <div class="flex items-center gap-3">
+        <span class="px-2.5 py-1 rounded-lg bg-emerald-600 text-white font-bold text-xs">🎉 XUẤT MP4 THÀNH CÔNG</span>
+        <div class="text-xs text-slate-700">
+          <div>
+            Đã lưu trực tiếp tại: <strong id="exportedFilePath" class="font-mono text-slate-900"></strong>
+            (<span id="exportedFileMeta" class="font-semibold text-emerald-800"></span>)
+          </div>
+          <div class="text-slate-500 mt-0.5">
+            Định dạng chuẩn TikTok 1080×1920 (9:16, 30fps) • Đoạn bản tin đầu giữ tiếng gốc MC • Các đoạn năm đã tắt tiếng hoàn toàn.
+          </div>
+        </div>
+      </div>
+      <div class="flex items-center gap-2">
+        <button
+          type="button"
+          onclick="toggleFinalPreviewModal()"
+          class="px-3 py-1.5 rounded-lg bg-white hover:bg-slate-100 border border-emerald-300 text-emerald-800 text-xs font-semibold transition cursor-pointer"
+        >
+          ▶️ Xem file MP4
+        </button>
+        <a
+          id="btnDirectDownloadMp4"
+          href="#"
+          download
+          class="px-3 py-1.5 rounded-lg bg-white hover:bg-slate-100 border border-emerald-300 text-emerald-800 text-xs font-semibold transition cursor-pointer"
+        >
+          ⬇️ Tải bản sao
+        </a>
+        <button
+          type="button"
+          onclick="openOutputFolder()"
+          class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition cursor-pointer"
+        >
+          📂 Mở thư mục lưu video
+        </button>
+      </div>
+    </div>
+
+    <!-- In-App Folder Browser Modal (Instant, Never Blocked by 360 Security) -->
+    <div
+      id="folderPickerModal"
+      class="hidden fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4"
+    >
+      <div class="bg-white border border-slate-200 rounded-2xl p-5 max-w-xl w-full shadow-2xl space-y-4">
+        <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+          <div>
+            <h3 class="font-bold text-base text-slate-900">📂 Chọn Thư Mục Lưu Video Đầu Ra</h3>
+            <p class="text-xs text-slate-500">Duyệt trực tiếp ổ đĩa trên máy tính (Mở tức thì, không bị chặn bởi 360 Security)</p>
+          </div>
+          <button
+            type="button"
+            onclick="closeFolderPickerModal()"
+            class="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer"
+          >
+            ✕ Đóng
+          </button>
+        </div>
+
+        <!-- Drives & Quick Access -->
+        <div class="space-y-2">
+          <div class="flex items-center gap-1.5 flex-wrap" id="folderModalDrives"></div>
+          <div class="flex items-center gap-1.5 flex-wrap" id="folderModalQuick"></div>
+        </div>
+
+        <!-- Current Path & Up Button -->
+        <div class="flex items-center gap-2">
+          <button
+            id="btnFolderUp"
+            type="button"
+            onclick="browseParentFolder()"
+            class="px-3 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 text-xs font-bold shrink-0 cursor-pointer"
+          >
+            ⬆️ Lên 1 cấp
+          </button>
+          <input
+            id="folderModalCurrentPath"
+            type="text"
+            class="flex-1 px-3 py-2 rounded-lg bg-slate-50 border border-slate-300 text-slate-900 font-mono text-xs"
+            onkeydown="if(event.key==='Enter') browseToFolder(this.value)"
+          />
+          <button
+            type="button"
+            onclick="browseToFolder(document.getElementById('folderModalCurrentPath').value)"
+            class="px-3 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 text-xs font-semibold shrink-0 cursor-pointer"
+          >
+            Đi tới
+          </button>
+        </div>
+
+        <!-- Subdirectories List -->
+        <div
+          id="folderModalList"
+          class="h-56 overflow-y-auto border border-slate-200 rounded-xl bg-slate-50 p-2 grid grid-cols-1 sm:grid-cols-2 gap-1.5 content-start"
+        ></div>
+
+        <!-- Create New Folder & Confirm -->
+        <div class="flex items-center justify-between gap-2 pt-2 border-t border-slate-100 flex-wrap">
+          <div class="flex items-center gap-1.5">
+            <input
+              id="newSubfolderName"
+              type="text"
+              placeholder="Tên thư mục mới..."
+              class="px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs bg-white w-40"
+            />
+            <button
+              type="button"
+              onclick="createNewSubfolder()"
+              class="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 text-xs font-semibold cursor-pointer"
+            >
+              ➕ Tạo thư mục
+            </button>
+          </div>
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              onclick="closeFolderPickerModal()"
+              class="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold cursor-pointer"
+            >
+              Hủy
+            </button>
+            <button
+              type="button"
+              onclick="confirmSelectedFolder()"
+              class="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-sm cursor-pointer"
+            >
+              ✅ Chọn thư mục này
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Final Video Preview Modal -->
+    <div
+      id="finalPreviewModal"
+      class="hidden fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4"
+    >
+      <div class="bg-white border border-slate-200 rounded-2xl p-4 max-w-md w-full shadow-xl space-y-3">
+        <div class="flex items-center justify-between">
+          <h3 id="finalModalTitle" class="font-bold text-sm text-slate-900">Xem trước Video MP4 Thành phẩm (9:16)</h3>
+          <button
+            type="button"
+            onclick="toggleFinalPreviewModal()"
+            class="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold"
+          >
+            ✕ Đóng
+          </button>
+        </div>
+        <div class="bg-black rounded-xl overflow-hidden flex items-center justify-center" style="aspect-ratio: 9/16; max-height: 70vh; margin: 0 auto;">
+          <video id="finalVideoPlayer" controls class="w-full h-full object-contain"></video>
+        </div>
+      </div>
+    </div>
+
+    <!-- Storyboard Video Grid (4 columns) -->
+    <div id="storyboardGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <!-- Populated dynamically by JS -->
+    </div>
+
+  </div>
+
+  <script>
+    let currentProjectId = null;
+    let currentProject = null;
+    let pollTimer = null;
+    let lastExportedPath = "";
+    let lastLookedUpCeleb = "";
+    let folderBrowserParentPath = "";
+
+    function formatMMSS(sec) {
+      const s = Math.max(0, Math.round(Number(sec) || 0));
+      const m = Math.floor(s / 60);
+      const r = s % 60;
+      return `${m}:${r < 10 ? '0' + r : r}`;
+    }
+
+    function formatRange(startSec, durSec) {
+      const st = Number(startSec) || 0;
+      const du = Number(durSec) || 0;
+      return `${formatMMSS(st)} - ${formatMMSS(st + du)}`;
+    }
+
+    function parseYearsInput() {
+      const raw = (document.getElementById('yearsListInput').value || '').trim();
+      if (!raw) return null;
+      const arr = raw
+        .split(/[,;\s]+/)
+        .map(s => parseInt(s.trim(), 10))
+        .filter(n => !isNaN(n) && n >= 1930 && n <= 2030);
+      return arr.length ? arr : null;
+    }
+
+    async function onCelebNameChange() {
+      await lookupCelebYears(true);
+    }
+
+    async function lookupCelebYears(updateGridPlaceholders = false) {
+      const name = document.getElementById('celebNameInput').value.trim();
+      if (!name) return null;
+      const btn = document.getElementById('btnLookupCeleb');
+      if (btn) {
+        btn.disabled = true;
+        btn.innerText = '⏳...';
+      }
+      try {
+        const res = await fetch('/api/lookup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name })
+        });
+        if (!res.ok) return null;
+        const info = await res.json();
+        lastLookedUpCeleb = name.toLowerCase();
+
+        document.getElementById('celebMetaName').innerText = info.name || name;
+        document.getElementById('celebMetaSpan').innerText =
+          `(${info.birth_year}–${info.death_year} • ${info.recommended_years ? info.recommended_years.length : 10} mốc năm • ${info.reference_images ? info.reference_images.length : 1} ảnh mẫu AI)`;
+        if (info.local_portrait_url || info.portrait_url) {
+          document.getElementById('celebPortraitThumb').src = info.local_portrait_url || info.portrait_url;
+        }
+        if (info.recommended_years && info.recommended_years.length) {
+          document.getElementById('yearsListInput').value = info.recommended_years.join(', ');
+          if (updateGridPlaceholders && (!currentProject || currentProject.status !== 'running')) {
+            renderPlaceholderGridForYears(info.recommended_years);
+          }
+        }
+        return info;
+      } catch (e) {
+        console.error(e);
+        return null;
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerText = '🔍 Tra năm';
+        }
+      }
+    }
+
+    async function initDefaultFolder() {
+      try {
+        const res = await fetch('/api/default-output-folder');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.output_folder) {
+            document.getElementById('outputFolderInput').value = data.output_folder;
+          }
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    // --- Instant In-App Folder Browser Modal Functions ---
+    async function openFolderPickerModal() {
+      const currentVal = document.getElementById('outputFolderInput').value.trim();
+      document.getElementById('folderPickerModal').classList.remove('hidden');
+      await browseToFolder(currentVal);
+    }
+
+    function closeFolderPickerModal() {
+      document.getElementById('folderPickerModal').classList.add('hidden');
+    }
+
+    async function browseToFolder(targetPath) {
+      try {
+        const url = '/api/fs/list-dirs' + (targetPath ? `?path=${encodeURIComponent(targetPath)}` : '');
+        const res = await fetch(url);
+        if (!res.ok) return;
+        const data = await res.json();
+        document.getElementById('folderModalCurrentPath').value = data.current_path || '';
+        folderBrowserParentPath = data.parent_path || '';
+
+        // Drives
+        const drivesEl = document.getElementById('folderModalDrives');
+        drivesEl.innerHTML = `<span class="text-[11px] font-bold text-slate-500 mr-1">Ổ đĩa:</span>` +
+          (data.drives || []).map(d => `
+            <button type="button" onclick="browseToFolder('${d.replace(/\\/g, '\\\\')}')"
+              class="px-2.5 py-1 rounded-md bg-slate-100 hover:bg-blue-50 border border-slate-300 text-xs font-mono font-bold text-slate-800 cursor-pointer">
+              💽 ${d}
+            </button>
+          `).join('');
+
+        // Quick paths
+        const quickEl = document.getElementById('folderModalQuick');
+        quickEl.innerHTML = `<span class="text-[11px] font-bold text-slate-500 mr-1">Chọn nhanh:</span>` +
+          (data.quick_paths || []).map(q => `
+            <button type="button" onclick="browseToFolder('${q.path.replace(/\\/g, '\\\\')}')"
+              class="px-2 py-0.5 rounded-md bg-amber-50 hover:bg-amber-100 border border-amber-200 text-[11px] font-semibold text-amber-900 cursor-pointer">
+              ${q.label}
+            </button>
+          `).join('');
+
+        // Subdirectories
+        const listEl = document.getElementById('folderModalList');
+        const subdirs = data.subdirs || [];
+        if (!subdirs.length) {
+          listEl.innerHTML = `<div class="col-span-2 text-center text-xs text-slate-400 py-12">Thư mục này chưa có thư mục con. Bấm "✅ Chọn thư mục này" để lưu video tại đây.</div>`;
+        } else {
+          listEl.innerHTML = subdirs.map(sd => `
+            <button type="button" onclick="browseToFolder('${sd.path.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}')"
+              class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 text-left text-xs font-medium text-slate-800 truncate cursor-pointer transition">
+              <span>📁</span>
+              <span class="truncate">${sd.name}</span>
+            </button>
+          `).join('');
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function browseParentFolder() {
+      if (folderBrowserParentPath) {
+        await browseToFolder(folderBrowserParentPath);
+      }
+    }
+
+    async function createNewSubfolder() {
+      const parent_path = document.getElementById('folderModalCurrentPath').value.trim();
+      const folder_name = document.getElementById('newSubfolderName').value.trim();
+      if (!folder_name) return;
+      try {
+        const res = await fetch('/api/fs/mkdir', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ parent_path, folder_name })
+        });
+        const data = await res.json();
+        if (res.ok && data.path) {
+          document.getElementById('newSubfolderName').value = '';
+          await browseToFolder(data.path);
+        } else {
+          alert(data.detail || 'Không thể tạo thư mục');
+        }
+      } catch (e) {
+        alert('Lỗi tạo thư mục: ' + e.message);
+      }
+    }
+
+    function confirmSelectedFolder() {
+      const chosen = document.getElementById('folderModalCurrentPath').value.trim();
+      if (chosen) {
+        document.getElementById('outputFolderInput').value = chosen;
+      }
+      closeFolderPickerModal();
+    }
+
+    // --- Pipeline & Storyboard ---
+    async function startPipeline() {
+      const name = document.getElementById('celebNameInput').value.trim();
+      const output_folder = document.getElementById('outputFolderInput').value.trim();
+      if (!name) {
+        alert('Vui lòng nhập tên người nổi tiếng!');
+        return;
+      }
+
+      const btnStart = document.getElementById('btnStartPipeline');
+      btnStart.disabled = true;
+      btnStart.innerText = '⏳ Đang tìm & cắt...';
+      document.getElementById('exportedBanner').classList.add('hidden');
+
+      try {
+        let years = parseYearsInput();
+        if (lastLookedUpCeleb && lastLookedUpCeleb !== name.toLowerCase()) {
+          const info = await lookupCelebYears(false);
+          if (info && info.recommended_years) {
+            years = info.recommended_years;
+          } else {
+            years = null;
+          }
+        }
+
+        const res = await fetch('/api/projects/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name,
+            output_folder,
+            years,
+            news_duration: 11.5,
+            year_clip_duration: 4.2
+          })
+        });
+        const proj = await res.json();
+        if (!res.ok) {
+          throw new Error(proj.detail || 'Lỗi khởi tạo dự án');
+        }
+        currentProjectId = proj.project_id;
+        lastLookedUpCeleb = name.toLowerCase();
+        if (proj.years && proj.years.length) {
+          document.getElementById('yearsListInput').value = proj.years.join(', ');
+        }
+        renderStoryboard(proj);
+        if (pollTimer) clearInterval(pollTimer);
+        pollTimer = setInterval(pollProjectStatus, 1800);
+      } catch (e) {
+        alert('Lỗi: ' + e.message);
+        btnStart.disabled = false;
+        btnStart.innerText = '🚀 1. Tạo Video (Tìm & Cắt)';
+      }
+    }
+
+    async function pollProjectStatus() {
+      if (!currentProjectId) return;
+      try {
+        const res = await fetch(`/api/projects/${currentProjectId}`);
+        if (!res.ok) return;
+        const proj = await res.json();
+        renderStoryboard(proj);
+        if (proj.status !== 'running') {
+          clearInterval(pollTimer);
+          pollTimer = null;
+          const btnStart = document.getElementById('btnStartPipeline');
+          btnStart.disabled = false;
+          btnStart.innerText = '🚀 1. Tạo Video (Tìm & Cắt)';
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    function computeTotalDuration(proj) {
+      if (!proj) return 0;
+      let total = 0;
+      if (proj.news_clip && proj.news_clip.duration_sec) {
+        total += Number(proj.news_clip.duration_sec) || 0;
+      }
+      for (const yc of (proj.year_clips || [])) {
+        total += Number(yc.duration_sec) || 0;
+      }
+      return Number(total.toFixed(1));
+    }
+
+    function renderStoryboard(proj) {
+      currentProject = proj;
+      const totalDur = computeTotalDuration(proj);
+      const totalDurEl = document.getElementById('totalDurationDisplay');
+      if (totalDurEl) totalDurEl.innerText = `${totalDur} giây`;
+
+      const expDurEl = document.getElementById('btnExportDuration');
+      if (expDurEl) expDurEl.innerText = totalDur > 0 ? `(${totalDur}s)` : '';
+
+      if (proj.celeb_info) {
+        const ci = proj.celeb_info;
+        document.getElementById('celebMetaName').innerText = ci.name || '';
+        document.getElementById('celebMetaSpan').innerText =
+          `(${ci.birth_year}–${ci.death_year} • ${(proj.year_clips || []).length} cảnh năm • ${ci.reference_images ? ci.reference_images.length : 1} ảnh mẫu AI)`;
+        if (ci.local_portrait_url || ci.portrait_url) {
+          document.getElementById('celebPortraitThumb').src = ci.local_portrait_url || ci.portrait_url;
+        }
+      }
+      if (proj.years && proj.years.length) {
+        document.getElementById('yearsListInput').value = proj.years.join(', ');
+      }
+
+      const statusBadge = document.getElementById('statusBadge');
+      const statusText = document.getElementById('statusText');
+      const progressBarWrap = document.getElementById('progressBarWrap');
+      const progressBarFill = document.getElementById('progressBarFill');
+
+      const readyNews = proj.news_clip && proj.news_clip.status === 'ready' ? 1 : 0;
+      const readyYears = (proj.year_clips || []).filter(y => y.status === 'ready').length;
+      const totalClips = 1 + (proj.year_clips || []).length;
+      const readyClips = readyNews + readyYears;
+
+      if (proj.status === 'running') {
+        statusBadge.className = 'px-2.5 py-1 rounded-full bg-blue-100 text-blue-800 border border-blue-200 font-semibold';
+        statusBadge.innerText = `⏳ Đang xử lý (${proj.progress_pct || 0}%)`;
+        statusText.innerText = proj.progress_message || 'Đang tự động tìm video đúng mốc năm & lọc khuôn mặt AI...';
+        progressBarWrap.classList.remove('hidden');
+        progressBarFill.style.width = `${proj.progress_pct || 5}%`;
+      } else {
+        progressBarWrap.classList.add('hidden');
+        statusBadge.className = 'px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 font-semibold';
+        statusBadge.innerText = `✔ Đã cắt xong ${readyClips}/${totalClips} đoạn`;
+        statusText.innerHTML = 'Xem trực tiếp video từng đoạn bên dưới. Bấm <strong>✨ Đổi cảnh</strong>, <strong>🔄 Đổi video</strong> hoặc <strong>➕ Cảnh 2</strong> (1 năm 2 cảnh liên tiếp).';
+      }
+
+      const grid = document.getElementById('storyboardGrid');
+
+      // Ensure Card 1: News Intro
+      let newsCard = document.getElementById('card-news-intro');
+      if (!newsCard) {
+        newsCard = document.createElement('div');
+        newsCard.id = 'card-news-intro';
+        newsCard.className = 'bg-white border-2 border-rose-300 rounded-xl p-3 shadow-xs flex flex-col justify-between space-y-2';
+        grid.appendChild(newsCard);
+      }
+      renderNewsCard(newsCard, proj.news_clip);
+
+      // Count occurrences of each year to display Scene 1 / Scene 2 badge when 1 year has 2 consecutive scenes
+      const yearClips = proj.year_clips || [];
+      const yearTotals = {};
+      yearClips.forEach(yc => {
+        yearTotals[yc.year] = (yearTotals[yc.year] || 0) + 1;
+      });
+      const yearSeen = {};
+
+      yearClips.forEach((yc, idx) => {
+        yearSeen[yc.year] = (yearSeen[yc.year] || 0) + 1;
+        const sceneLabel = yearTotals[yc.year] > 1 ? `Cảnh ${yearSeen[yc.year]}/${yearTotals[yc.year]}` : '';
+        const cardId = `card-year-slot-${idx}`;
+        let yCard = document.getElementById(cardId);
+        if (!yCard) {
+          yCard = document.createElement('div');
+          yCard.id = cardId;
+          yCard.className = 'bg-white border border-slate-200 rounded-xl p-3 shadow-xs flex flex-col justify-between space-y-2';
+          grid.appendChild(yCard);
+        }
+        renderYearCard(yCard, yc, idx, sceneLabel, yearClips.length);
+      });
+
+      const validIds = new Set(['card-news-intro', ...yearClips.map((_, idx) => `card-year-slot-${idx}`)]);
+      Array.from(grid.children).forEach(el => {
+        if (!validIds.has(el.id)) el.remove();
+      });
+    }
+
+    function renderNewsCard(cardEl, nc) {
+      if (!nc) return;
+      const sig = `${nc.status}_${nc.clip_url || ''}_${nc.start_sec || 0}_${nc.duration_sec || 0}`;
+      if (cardEl.getAttribute('data-sig') === sig) return;
+      cardEl.setAttribute('data-sig', sig);
+
+      const dur = Number(nc.duration_sec || 11.5).toFixed(1);
+      const timeRange = formatRange(nc.start_sec || 0, nc.duration_sec || 11.5);
+      const titleText = nc.title || 'Bản tin mở đầu thông báo về nhân vật';
+
+      let mediaHtml = '';
+      if (nc.status === 'ready' && nc.clip_url) {
+        mediaHtml = `
+          <video
+            id="newsVideoEl"
+            src="${nc.clip_url}"
+            controls
+            playsinline
+            preload="metadata"
+            class="absolute inset-0 w-full h-full object-cover z-0"
+          ></video>
+        `;
+      } else if (nc.status === 'error') {
+        mediaHtml = `
+          <div class="my-auto text-center text-rose-300 text-xs font-medium px-2 z-10">
+            ⚠️ ${nc.error || 'Chưa tải được bản tin'}
+          </div>
+        `;
+      } else {
+        mediaHtml = `
+          <div class="my-auto text-center text-white/90 text-xs font-medium px-2 z-10 animate-pulse">
+            ⏳ Đang tìm & cắt bản tin MC...
+          </div>
+        `;
+      }
+
+      cardEl.innerHTML = `
+        <div class="space-y-1.5">
+          <div class="relative h-40 rounded-lg bg-slate-800 overflow-hidden flex flex-col justify-between p-2">
+            ${mediaHtml}
+            <div class="relative z-10 flex items-center justify-between pointer-events-none">
+              <span class="px-2 py-0.5 rounded bg-rose-600 text-white font-bold text-[11px] shadow-xs">📺 BẢN TIN MỞ ĐẦU</span>
+              <span class="px-2 py-0.5 rounded bg-white/90 text-slate-900 font-bold text-[11px] shadow-xs">${dur}s</span>
+            </div>
+          </div>
+
+          <div class="flex items-center justify-between text-[11px] px-0.5">
+            <span class="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 font-semibold">🔊 Giữ tiếng gốc MC</span>
+            <span class="text-slate-500 font-mono">${timeRange}</span>
+          </div>
+          <div class="text-[11px] text-slate-600 truncate px-0.5" title="${titleText.replace(/"/g, '&quot;')}">
+            ${nc.url ? `<a href="${nc.url}" target="_blank" class="hover:text-blue-600 hover:underline">🔗 ${titleText}</a>` : titleText}
+          </div>
+
+          <div id="newsTrimDrawer" class="hidden bg-slate-50 border border-slate-200 rounded-lg p-2.5 space-y-2 text-xs">
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="block text-[11px] font-semibold text-slate-600">Giây bắt đầu (s)</label>
+                <input id="newsTrimStart" type="number" step="0.5" value="${nc.start_sec || 0}" class="w-full px-2 py-1 rounded border border-slate-300 bg-white text-slate-900 font-mono text-xs" />
+              </div>
+              <div>
+                <label class="block text-[11px] font-semibold text-slate-600">Độ dài (8–15s)</label>
+                <input id="newsTrimDur" type="number" step="0.5" min="6" max="20" value="${nc.duration_sec || 11.5}" class="w-full px-2 py-1 rounded border border-slate-300 bg-white text-slate-900 font-mono text-xs" />
+              </div>
+            </div>
+            <div class="flex gap-1.5">
+              <input id="newsCustomUrl" type="text" placeholder="Hoặc dán link YouTube bản tin..." class="flex-1 px-2 py-1 rounded border border-slate-300 bg-white text-slate-800 text-xs" />
+              <button type="button" onclick="applyNewsTrim()" class="px-2.5 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs cursor-pointer">Áp dụng</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex gap-2">
+          <button
+            type="button"
+            onclick="swapNewsNext()"
+            class="flex-1 py-1.5 px-2 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 font-semibold text-xs transition cursor-pointer"
+          >
+            🔄 Đổi bản tin
+          </button>
+          <button
+            type="button"
+            onclick="toggleDrawer('newsTrimDrawer')"
+            class="py-1.5 px-2.5 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 font-semibold text-xs transition cursor-pointer"
+          >
+            ✂️ Chỉnh giây
+          </button>
+        </div>
+      `;
+    }
+
+    function computeHonestAiPct(yc) {
+      if (yc.status !== 'ready') return '--';
+      const sim = Number(yc.face_similarity || 0);
+      if (sim <= 0.15) return Math.round(sim * 250);
+      const mapped = 75 + ((sim - 0.24) / 0.32) * 23;
+      return Math.min(99, Math.max(40, Math.round(mapped)));
+    }
+
+    function renderYearCard(cardEl, yc, slotIdx, sceneLabel, totalYearClips) {
+      const sig = `${slotIdx}_${yc.year}_${sceneLabel}_${yc.status}_${yc.clip_url || ''}_${yc.start_sec || 0}_${yc.duration_sec || 0}_${yc.face_similarity || 0}`;
+      if (cardEl.getAttribute('data-sig') === sig) return;
+      cardEl.setAttribute('data-sig', sig);
+
+      const dur = Number(yc.duration_sec || 4.2).toFixed(1);
+      const simPct = computeHonestAiPct(yc);
+      const badgeColor = (typeof simPct === 'number' && simPct >= 75)
+        ? 'bg-emerald-100 text-emerald-900'
+        : 'bg-amber-100 text-amber-900';
+      const titleText = yc.title || `Video năm ${yc.year}`;
+
+      let videoHtml = '';
+      if (yc.status === 'ready' && yc.clip_url) {
+        videoHtml = `
+          <video
+            src="${yc.clip_url}"
+            autoplay
+            loop
+            muted
+            playsinline
+            class="absolute inset-0 w-full h-full object-cover z-0"
+          ></video>
+        `;
+      } else if (yc.status === 'error') {
+        videoHtml = `
+          <div class="my-auto text-xs text-rose-300 text-center px-2 z-10">
+            ⚠️ ${yc.error || `Không tìm được video năm ${yc.year}`}
+          </div>
+        `;
+      } else {
+        videoHtml = `
+          <div class="my-auto text-xs text-white/80 text-center px-2 z-10 animate-pulse">
+            ${yc.status === 'processing' ? `⏳ Đang lọc mặt AI năm ${yc.year}...` : `⏳ Chờ xử lý năm ${yc.year}`}
+          </div>
+        `;
+      }
+
+      const scenePillHtml = sceneLabel
+        ? `<span class="px-1.5 py-0.5 rounded bg-indigo-600/90 text-white font-bold text-[10px] shadow-xs">${sceneLabel}</span>`
+        : '';
+
+      cardEl.innerHTML = `
+        <div class="space-y-1.5">
+          <div class="relative h-40 rounded-lg bg-slate-700 overflow-hidden flex flex-col justify-between items-center p-2.5">
+            ${videoHtml}
+            <div class="relative z-10 w-full flex items-center justify-between pointer-events-none">
+              <div class="flex items-center gap-1">
+                <span class="px-2 py-0.5 rounded ${badgeColor} font-bold text-xs shadow-xs">👤 AI: ${simPct}%</span>
+                ${scenePillHtml}
+              </div>
+              <span class="px-2 py-0.5 rounded bg-slate-900/75 text-white text-xs">🔇 ${dur}s</span>
+            </div>
+            <div class="relative z-10 pointer-events-none"></div>
+            <span class="relative z-10 font-black text-xl tracking-wide year-label-stroke pointer-events-none">${yc.year}</span>
+          </div>
+          <div class="text-[11px] text-slate-600 truncate px-0.5" title="${titleText.replace(/"/g, '&quot;')}">
+            ${yc.url ? `<a href="${yc.url}" target="_blank" class="hover:text-blue-600 hover:underline">🔗 ${titleText}</a>` : titleText}
+          </div>
+        </div>
+        <div class="flex gap-1.5">
+          <button
+            type="button"
+            onclick="swapYearSegment(${yc.year}, ${slotIdx})"
+            class="flex-1 py-1.5 px-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-900 font-semibold text-xs transition cursor-pointer"
+            title="Chọn góc mặt khác của nhân vật trong cùng video năm ${yc.year}"
+          >
+            ✨ Đổi cảnh
+          </button>
+          <button
+            type="button"
+            onclick="swapYearVideo(${yc.year}, ${slotIdx})"
+            class="flex-1 py-1.5 px-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 font-semibold text-xs transition cursor-pointer"
+            title="Đổi sang video YouTube khác cho năm ${yc.year}"
+          >
+            🔄 Đổi video
+          </button>
+          <button
+            type="button"
+            onclick="addSecondSceneForYear(${yc.year}, ${slotIdx})"
+            class="py-1.5 px-2 rounded-lg bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 font-bold text-xs transition cursor-pointer"
+            title="Thêm 1 cảnh liên tiếp nữa cho cùng năm ${yc.year} (1 năm 2 cảnh liên tiếp)"
+          >
+            ➕
+          </button>
+          ${totalYearClips > 4 ? `
+          <button
+            type="button"
+            onclick="removeYearScene(${yc.year}, ${slotIdx})"
+            class="py-1.5 px-2 rounded-lg bg-slate-100 hover:bg-rose-50 border border-slate-200 hover:border-rose-200 text-slate-500 hover:text-rose-600 font-bold text-xs transition cursor-pointer"
+            title="Xóa cảnh này khỏi timeline"
+          >
+            ✕
+          </button>` : ''}
+        </div>
+      `;
+    }
+
+    function toggleDrawer(id) {
+      const el = document.getElementById(id);
+      if (el) el.classList.toggle('hidden');
+    }
+
+    async function swapNewsNext() {
+      if (!currentProjectId) {
+        alert('Hãy bấm "1. Tạo Video (Tìm & Cắt)" trước!');
+        return;
+      }
+      const card = document.getElementById('card-news-intro');
+      if (card) card.classList.add('opacity-50', 'pointer-events-none');
+      try {
+        const res = await fetch(`/api/projects/${currentProjectId}/swap-news`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        });
+        const proj = await res.json();
+        if (res.ok) renderStoryboard(proj);
+        else alert(proj.detail || 'Không thể đổi bản tin');
+      } finally {
+        if (card) card.classList.remove('opacity-50', 'pointer-events-none');
+      }
+    }
+
+    async function applyNewsTrim() {
+      if (!currentProjectId) {
+        alert('Hãy bấm "1. Tạo Video (Tìm & Cắt)" trước!');
+        return;
+      }
+      const start_sec = parseFloat(document.getElementById('newsTrimStart').value) || 0;
+      const duration_sec = parseFloat(document.getElementById('newsTrimDur').value) || 11.5;
+      const custom_url = (document.getElementById('newsCustomUrl').value || '').trim() || null;
+
+      const card = document.getElementById('card-news-intro');
+      if (card) card.classList.add('opacity-50', 'pointer-events-none');
+      try {
+        const payload = custom_url ? { custom_url, duration_sec } : { start_sec, duration_sec };
+        const res = await fetch(`/api/projects/${currentProjectId}/swap-news`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const proj = await res.json();
+        if (res.ok) renderStoryboard(proj);
+        else alert(proj.detail || 'Không thể chỉnh giây bản tin');
+      } finally {
+        if (card) card.classList.remove('opacity-50', 'pointer-events-none');
+      }
+    }
+
+    async function swapYearSegment(year, slot_index) {
+      await callSwapYear(year, slot_index, { year, slot_index, action: 'next_segment' });
+    }
+
+    async function swapYearVideo(year, slot_index) {
+      await callSwapYear(year, slot_index, { year, slot_index, action: 'next_video' });
+    }
+
+    async function addSecondSceneForYear(year, slot_index) {
+      await callSwapYear(year, slot_index, { year, slot_index, action: 'add_scene' });
+    }
+
+    async function removeYearScene(year, slot_index) {
+      await callSwapYear(year, slot_index, { year, slot_index, action: 'remove_scene' });
+    }
+
+    async function callSwapYear(year, slot_index, payload) {
+      if (!currentProjectId) {
+        alert('Hãy bấm "1. Tạo Video (Tìm & Cắt)" trước!');
+        return;
+      }
+      const card = document.getElementById(`card-year-slot-${slot_index}`);
+      if (card) card.classList.add('opacity-50', 'pointer-events-none');
+      try {
+        const res = await fetch(`/api/projects/${currentProjectId}/swap-year`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const proj = await res.json();
+        if (res.ok) renderStoryboard(proj);
+        else alert(proj.detail || `Lỗi khi xử lý cảnh năm ${year}`);
+      } catch (e) {
+        alert('Lỗi kết nối: ' + e.message);
+      } finally {
+        if (card) card.classList.remove('opacity-50', 'pointer-events-none');
+      }
+    }
+
+    async function renderFinalVideo() {
+      if (!currentProjectId) {
+        alert('Vui lòng bấm "🚀 1. Tạo Video (Tìm & Cắt)" trước khi xuất MP4!');
+        return;
+      }
+      const output_folder = document.getElementById('outputFolderInput').value.trim();
+      if (!output_folder) {
+        alert('Vui lòng chọn hoặc nhập Thư mục lưu video đầu ra!');
+        return;
+      }
+
+      const btn = document.getElementById('btnRenderFinal');
+      const labelEl = document.getElementById('btnRenderLabel');
+      btn.disabled = true;
+      if (labelEl) labelEl.innerText = '⏳ Đang xuất MP4...';
+
+      try {
+        const res = await fetch(`/api/projects/${currentProjectId}/render`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            output_folder,
+            layout: 'center_band'
+          })
+        });
+        const proj = await res.json();
+        if (!res.ok) {
+          throw new Error(proj.detail || 'Lỗi khi xuất file MP4');
+        }
+        renderStoryboard(proj);
+        const fv = proj.final_video;
+        if (fv && fv.output_path) {
+          lastExportedPath = fv.output_path;
+          document.getElementById('exportedFilePath').innerText = fv.output_path;
+          document.getElementById('exportedFileMeta').innerText = `${fv.total_duration}s • ${fv.file_size_mb} MB`;
+          document.getElementById('exportedBanner').classList.remove('hidden');
+          if (fv.video_url) {
+            document.getElementById('finalVideoPlayer').src = fv.video_url;
+            const dlLink = document.getElementById('btnDirectDownloadMp4');
+            if (dlLink) {
+              dlLink.href = fv.video_url;
+              dlLink.download = fv.output_path.split(/[\\/]/).pop();
+            }
+          }
+        }
+      } catch (e) {
+        alert('Lỗi xuất MP4: ' + e.message);
+      } finally {
+        btn.disabled = false;
+        if (labelEl) labelEl.innerText = '💾 2. Xuất MP4';
+      }
+    }
+
+    function toggleFinalPreviewModal() {
+      const modal = document.getElementById('finalPreviewModal');
+      const player = document.getElementById('finalVideoPlayer');
+      modal.classList.toggle('hidden');
+      if (modal.classList.contains('hidden')) {
+        player.pause();
+      } else if (player.src) {
+        player.play().catch(() => {});
+      }
+    }
+
+    async function openOutputFolder() {
+      const target = lastExportedPath || document.getElementById('outputFolderInput').value.trim();
+      const fd = new FormData();
+      fd.append('path', target);
+      await fetch('/api/open-folder', { method: 'POST', body: fd });
+    }
+
+    function renderPlaceholderGridForYears(yearsList) {
+      const demoYears = (yearsList && yearsList.length) ? yearsList : [1976, 1980, 1985, 1988, 1990, 1996, 2000, 2004, 2006, 2013, 2020, 2025];
+      const dummyProj = {
+        status: 'idle',
+        years: demoYears,
+        news_clip: {
+          status: 'pending',
+          duration_sec: 11.5,
+          start_sec: 0
+        },
+        year_clips: demoYears.map(y => ({
+          year: y,
+          status: 'pending',
+          duration_sec: 4.4,
+          face_similarity: 0.45
+        }))
+      };
+      renderStoryboard(dummyProj);
+      document.getElementById('statusBadge').innerText = '✔ Sẵn sàng tạo video';
+      document.getElementById('statusText').innerHTML =
+        'Các mốc năm & thời lượng đã được tính tự động theo tiểu sử nhân vật (~1 phút). Bấm <strong>🚀 1. Tạo Video (Tìm & Cắt)</strong> để bắt đầu.';
+    }
+
+    window.addEventListener('DOMContentLoaded', async () => {
+      await initDefaultFolder();
+      try {
+        const res = await fetch('/api/projects-latest');
+        if (res.ok) {
+          const latest = await res.json();
+          if (latest && latest.project_id) {
+            currentProjectId = latest.project_id;
+            if (latest.celeb_info && latest.celeb_info.name) {
+              document.getElementById('celebNameInput').value = latest.celeb_info.name;
+              lastLookedUpCeleb = latest.celeb_info.name.toLowerCase();
+            }
+            if (latest.output_folder) {
+              document.getElementById('outputFolderInput').value = latest.output_folder;
+            }
+            renderStoryboard(latest);
+            if (latest.final_video && latest.final_video.output_path) {
+              const fv = latest.final_video;
+              lastExportedPath = fv.output_path;
+              document.getElementById('exportedFilePath').innerText = fv.output_path;
+              document.getElementById('exportedFileMeta').innerText = `${fv.total_duration}s • ${fv.file_size_mb} MB`;
+              document.getElementById('exportedBanner').classList.remove('hidden');
+              if (fv.video_url) {
+                document.getElementById('finalVideoPlayer').src = fv.video_url;
+                const dlLink = document.getElementById('btnDirectDownloadMp4');
+                if (dlLink) {
+                  dlLink.href = fv.video_url;
+                  dlLink.download = fv.output_path.split(/[\\/]/).pop();
+                }
+              }
+            }
+            if (latest.status === 'running') {
+              pollTimer = setInterval(pollProjectStatus, 1800);
+            }
+            return;
+          }
+        }
+      } catch (e) {
+        console.error(e);
+      }
+      await lookupCelebYears(true);
+    });
+  </script>
+</body>
+</html>
