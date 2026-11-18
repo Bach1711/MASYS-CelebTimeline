@@ -213,6 +213,35 @@
           "Chạy tự động một mạch hết danh sách nhân vật: Tự động Tìm & Cắt VÀ Tự động Xuất file .mp4 vào thư mục Output cho từng người.",
           "Hiển thị thanh Tab danh sách các nhân vật trong lô chạy, cho phép bấm vào từng người để xem lại Storyboard, chỉnh sửa cảnh và xuất lại MP4."
         ]
+      },
+      {
+        id: "CON-210",
+        url: "https://linear.app/conducdaudan/issue/CON-210/ui-and-workflow-bang-nhap-320-hang-buoc-quet-and-duyet-nhan-vat-tab",
+        title: "[UI & Workflow] Bảng Nhập 3–20 Hàng, Bước Quét & Duyệt Nhân Vật, Tab Không Popup & Xuất MP4 Thủ Công / Xuất Tất Cả",
+        priority: "Urgent",
+        status: "Done",
+        module: "celeb_service.py, app.py, static/index.html",
+        description: "Thiết kế Bảng Nhập 3 hàng mặc định (mở rộng 20 hàng, điền bao nhiêu người chạy bấy nhiêu); bổ sung bước 🔍 1. Quét Nhân Vật (tự sửa lỗi chính tả Michale Jackson ➔ Michael Jackson, ưu tiên người thật John Hurt / Prince (musician) thay vì Pizza Hut / Prince of Wales, có dropdown chọn lại); tạo Tab nhân vật ngay sau khi quét và bấm chuyển Tab mượt mà không hiện popup; dừng tự động xuất MP4 để kiểm nghiệm video trước và thêm nút 💾 Xuất Video từng Tab + 💾 Xuất Tất Cả MP4.",
+        dod: [
+          "Bảng nhập tên nhân vật hiển thị mặc định 3 hàng và có nút Mở rộng lên 20 hàng (điền bao nhiêu hàng thì quét & chạy bấy nhiêu người).",
+          "Nút 🔍 1. Quét Nhân Vật trả về thông tin từng nhân vật (ảnh, năm sinh-mất, mô tả), tự sửa lỗi chính tả và có dropdown chọn ứng viên Wikipedia khác nếu trùng tên.",
+          "Các Tab nhân vật được khởi tạo ngay sau khi quét; bấm vào bất kỳ Tab nào sẽ hiện ngay tiến độ & bảng lưới của Tab đó mà KHÔNG hiện popup hỏi lại.",
+          "Khi chạy Tạo Video sẽ chỉ Tìm & Cắt (không tự động xuất MP4); mỗi Tab chạy xong có nút 💾 Xuất Video riêng và thanh chạy hàng loạt có nút 💾 Xuất Tất Cả MP4."
+        ]
+      },
+      {
+        id: "CON-211",
+        url: "https://linear.app/conducdaudan/issue/CON-211/ai-vision-filter-bo-loc-bat-buoc-hinh-djong-tuong-tac-khong-chu-dje",
+        title: "[AI Vision Filter] Bộ lọc Bắt buộc Hình Động Tương Tác, Không Chữ Đè & Mặt Nhân Vật Xuyên Suốt (Fix lỗi 1984 & 1999)",
+        priority: "Urgent",
+        status: "Done",
+        module: "face_engine.py, youtube_pipeline.py",
+        description: "Nâng cấp bộ lọc thị giác máy tính 3 lớp cho các cảnh năm: (1) Bắt buộc hình động nhân vật tương tác thật (median_face_motion >= 7.8 trên vùng mặt căn chỉnh 64x64, loại bỏ triệt để ảnh tĩnh/audio interview như năm 1999); (2) Khử chữ đè/phụ đề/banner bản tin (TopHat/BlackHat text stroke score <= 0.16); (3) Bắt buộc mặt nhân vật xuất hiện xuyên suốt (match_ratio >= 0.78 kèm kiểm tra khung đầu-giữa-cuối, loại bỏ cảnh quảng cáo cắt sang người khác như năm 1984).",
+        dod: [
+          "Loại bỏ hoàn toàn các đoạn chỉ là ảnh tĩnh, phóng/thu ảnh (Ken Burns) hoặc audio phỏng vấn ghép ảnh (như lỗi Michael Jackson 1999).",
+          "Loại bỏ hoặc phạt nặng các đoạn có chữ đè, phụ đề dịch hoặc banner chữ chạy ngang màn hình.",
+          "Đảm bảo khuôn mặt nhân vật chính xuất hiện xuyên suốt đoạn clip 4–5s (match_ratio >= 78%, khung đầu-giữa-cuối đều có mặt nhân vật, khắc phục lỗi năm 1984)."
+        ]
       }
     ];
 

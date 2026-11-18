@@ -127,6 +127,26 @@ class FaceEngine:
                 continue
         return max(0.0, min(1.0, best_sim))
 
+    def _compute_text_overlay_score(self, frame: np.ndarray) -> float:
+        """
+        Detect burned-in text, subtitles, audio waveforms, and lower-third news banners (chyrons)
+        using morphological TopHat (bright text on dark bg) and BlackHat (dark text on white banner)
+        in the middle and lower bands of the frame.
+        Returns a score in [0.0, 1.0] where <= 0.14 is clean video and >= 0.20 has visible text/banner overlays.
+        """
+        try:
+            small = cv2.resize(frame, (320, 180))
+            gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+            roi = gray[68:172, 12:308]
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 3))
+            tophat = cv2.morphologyEx(roi, cv2.MORPH_TOPHAT, kernel)
+            blackhat = cv2.morphologyEx(roi, cv2.MORPH_BLACKHAT, kernel)
+            char_strokes = ((tophat > 75) | (blackhat > 75)).astype(np.float32)
+            row_cov = np.mean(char_strokes, axis=1)
+            return round(float(np.mean(row_cov > 0.085)), 3)
+        except Exception:
+            return 0.0
+
     def score_frame(
         self,
         frame: np.ndarray,
@@ -134,31 +154,53 @@ class FaceEngine:
         require_identity: bool = True,
     ) -> Dict[str, Any]:
         """
-        Evaluate a video frame for presence of the main celebrity face.
-        Strongly penalizes frames where only an interviewer/other actor is present.
+        Evaluate a video frame for:
+        1. Presence & identity match of the main celebrity face (`SFace >= 0.26`).
+        2. Absence of burned-in text, subtitles, or lower-third banners (`text_score`).
+        3. Aligned face crop & scene patch for live-motion verification across frames.
         """
         if frame is None:
-            return {"score": 0.0, "matched": False, "similarity": 0.0, "face_count": 0}
+            return {
+                "score": 0.0,
+                "matched": False,
+                "similarity": 0.0,
+                "face_count": 0,
+                "text_score": 0.0,
+                "aligned_gray": None,
+                "frame_gray": None,
+            }
 
         h, w = frame.shape[:2]
         frame_area = float(max(1, h * w))
+        text_score = self._compute_text_overlay_score(frame)
+        small_frame_gray = cv2.cvtColor(cv2.resize(frame, (96, 54)), cv2.COLOR_BGR2GRAY).astype(np.float32)
+
         faces = self.detect_faces(frame)
         if not faces:
-            return {"score": 0.0, "matched": False, "similarity": 0.0, "face_count": 0}
+            return {
+                "score": 0.0,
+                "matched": False,
+                "similarity": 0.0,
+                "face_count": 0,
+                "text_score": text_score,
+                "aligned_gray": None,
+                "frame_gray": small_frame_gray,
+            }
 
         best_face_score = 0.0
         best_sim = 0.0
         matched = False
         best_bbox = None
         best_emb = None
+        best_aligned_gray = None
 
         for face in faces[:4]:
             x, y, fw, fh = float(face[0]), float(face[1]), float(face[2]), float(face[3])
             conf = float(face[14])
             area_ratio = (fw * fh) / frame_area
 
-            # Ignore tiny background faces (< 1.4% of frame area)
-            if area_ratio < 0.014:
+            # Ignore tiny background faces (< 1.5% of frame area)
+            if area_ratio < 0.015:
                 continue
 
             cx = (x + fw * 0.5) / w
@@ -170,41 +212,57 @@ class FaceEngine:
 
             sim = 0.5
             emb = None
-            if require_identity and ref_embeddings and self.recognizer is not None:
-                emb = self.extract_embedding(frame, face)
-                if emb is not None:
-                    sim = self.compare_embeddings(emb, ref_embeddings)
+            aligned_gray = None
+            if self.recognizer is not None:
+                try:
+                    aligned_bgr = self.recognizer.alignCrop(frame, face)
+                    aligned_gray = cv2.cvtColor(cv2.resize(aligned_bgr, (64, 64)), cv2.COLOR_BGR2GRAY).astype(np.float32)
+                    if require_identity and ref_embeddings:
+                        emb = self.recognizer.feature(aligned_bgr)
+                        if emb is not None:
+                            sim = self.compare_embeddings(emb, ref_embeddings)
+                except Exception:
+                    pass
 
             if require_identity and ref_embeddings:
-                # >= 0.24 is a verified identity match across decades in SFace cosine similarity
-                if sim >= 0.24:
+                # >= 0.26 is a verified identity match; strictly reject other people (< 0.26)
+                if sim >= 0.26:
                     is_celeb = True
                     sim_mult = min(1.0, 0.45 + (sim / 0.55) * 0.55)
                 else:
                     is_celeb = False
-                    # Strong penalty for non-matching faces so other people are never selected
-                    sim_mult = 0.03
+                    sim_mult = 0.01
             else:
                 is_celeb = True
                 sim_mult = 0.8
 
-            crowd_penalty = 1.0 if len(faces) <= 2 else max(0.55, 1.0 - 0.12 * (len(faces) - 2))
+            crowd_penalty = 1.0 if len(faces) <= 2 else max(0.50, 1.0 - 0.14 * (len(faces) - 2))
+            if text_score >= 0.22:
+                text_penalty = 0.08
+            elif text_score >= 0.14:
+                text_penalty = 0.35
+            else:
+                text_penalty = 1.0
 
-            total_score = conf * size_score * center_weight * sim_mult * crowd_penalty
+            total_score = conf * size_score * center_weight * sim_mult * crowd_penalty * text_penalty
             if total_score > best_face_score:
                 best_face_score = total_score
                 best_sim = sim
                 matched = is_celeb
                 best_bbox = [int(x), int(y), int(fw), int(fh)]
                 best_emb = emb
+                best_aligned_gray = aligned_gray
 
         return {
             "score": round(float(best_face_score), 4),
             "matched": matched,
             "similarity": round(float(best_sim), 4),
             "face_count": len(faces),
+            "text_score": text_score,
             "bbox": best_bbox,
             "embedding": best_emb,
+            "aligned_gray": best_aligned_gray,
+            "frame_gray": small_frame_gray,
         }
 
     def find_best_segments(
@@ -219,10 +277,11 @@ class FaceEngine:
         skip_start_sec: float = 1.0,
     ) -> List[Dict[str, Any]]:
         """
-        Scan a video and find the top_k non-overlapping segments that have the clearest,
-        most continuous view of the target celebrity's face.
-        Supports adaptive segment duration (`min_duration` to `max_duration` seconds)
-        so continuous close-up shots can naturally play for 4.0s-5.4s instead of a rigid 3.5s.
+        Scan a video and find the top_k non-overlapping segments that satisfy all 3 rules:
+        1. Continuous presence of the target celebrity's face (`match_ratio >= 0.78`, including start/mid/end frames).
+        2. Real live-action motion (`is_live_motion=True`: celebrity's aligned face is actively moving/talking/interacting,
+           strictly rejecting static photos, slideshows, and audio-waveform clips).
+        3. Clean video without heavy burned-in text, subtitles, or TV lower-third banners (`is_clean_no_text=True`).
         """
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
@@ -237,18 +296,7 @@ class FaceEngine:
 
         if total_duration <= min_dur + 0.5:
             cap.release()
-            dur_val = round(min(total_duration, clip_duration), 2)
-            return [
-                {
-                    "start_sec": 0.0,
-                    "end_sec": dur_val,
-                    "duration_sec": dur_val,
-                    "score": 0.1,
-                    "similarity": 0.2,
-                    "face_ratio": 0.5,
-                    "match_ratio": 0.0,
-                }
-            ]
+            return []
 
         step_frames = max(1, int(round(fps / sample_fps)))
         start_frame = int(min(skip_start_sec, max(0.0, total_duration - min_dur - 0.5)) * fps)
@@ -280,20 +328,20 @@ class FaceEngine:
         if not timeline:
             return []
 
-        min_samples = max(2, int(round(min_dur * sample_fps)))
+        min_samples = max(3, int(round(min_dur * sample_fps)))
         max_samples = max(min_samples + 1, int(round(max_dur * sample_fps)))
         candidates = []
 
         for i in range(len(timeline)):
             base_slice = timeline[i : i + min_samples]
-            if len(base_slice) < max(2, min_samples - 1):
+            if len(base_slice) < min_samples:
                 continue
 
-            # Adaptively extend the window up to max_samples while the celebrity's face stays on screen!
+            # Adaptively extend the window up to max_samples ONLY while the celebrity's face stays continuously matched & clean!
             w_slice = list(base_slice)
             for j in range(i + min_samples, min(len(timeline), i + max_samples)):
                 nxt = timeline[j]
-                if nxt["matched"] and nxt["score"] >= 0.08:
+                if nxt["matched"] and nxt["score"] >= 0.08 and nxt.get("text_score", 0.0) <= 0.16:
                     w_slice.append(nxt)
                 else:
                     break
@@ -309,42 +357,81 @@ class FaceEngine:
             all_sims = [x["similarity"] for x in w_slice]
             matched_flags = [1.0 if x["matched"] else 0.0 for x in w_slice]
             has_face_flags = [1.0 if x["face_count"] > 0 else 0.0 for x in w_slice]
+            text_scores = [float(x.get("text_score", 0.0)) for x in w_slice]
 
             avg_score = float(np.mean(scores))
             avg_sim = float(np.mean(matched_sims)) if matched_sims else float(np.mean(all_sims))
             match_ratio = float(np.mean(matched_flags))
             face_ratio = float(np.mean(has_face_flags))
+            avg_text_score = float(np.mean(text_scores))
 
-            continuity_bonus = 1.3 if face_ratio >= 0.85 else (0.9 if face_ratio >= 0.6 else 0.25)
-            if match_ratio >= 0.75:
-                identity_bonus = 2.0
-            elif match_ratio >= 0.50:
-                identity_bonus = 1.25
-            elif match_ratio >= 0.28:
-                identity_bonus = 0.5
-            else:
-                identity_bonus = 0.05
+            # Check continuous celebrity presence across start, middle, and end of the clip (prevents cutaway to audience/other people!)
+            mid_idx = len(w_slice) // 2
+            start_has_celeb = any(x["matched"] for x in w_slice[:2])
+            mid_has_celeb = bool(w_slice[mid_idx]["matched"]) or (len(w_slice) >= 3 and bool(w_slice[mid_idx - 1]["matched"]))
+            end_has_celeb = any(x["matched"] for x in w_slice[-2:])
+            has_continuous_celeb = (match_ratio >= 0.78 and start_has_celeb and mid_has_celeb and end_has_celeb)
 
-            # Slight bonus for longer continuous shots
+            # Compute live facial & scene motion across consecutive frames (rejects static photos / audio-waveform slideshows!)
+            aligned_patches = [x["aligned_gray"] for x in w_slice if x.get("aligned_gray") is not None]
+            face_diffs = [
+                float(np.mean(np.abs(aligned_patches[k] - aligned_patches[k - 1])))
+                for k in range(1, len(aligned_patches))
+            ]
+            median_face_motion = float(np.median(face_diffs)) if face_diffs else 0.0
+
+            frame_patches = [x["frame_gray"] for x in w_slice if x.get("frame_gray") is not None]
+            frame_diffs = [
+                float(np.mean(np.abs(frame_patches[k] - frame_patches[k - 1])[:36, :]))
+                for k in range(1, len(frame_patches))
+            ]
+            median_frame_motion = float(np.median(frame_diffs)) if frame_diffs else 0.0
+
+            # Live motion requires continuous movement of the face (not frozen photo) AND scene
+            is_live_motion = (median_face_motion >= 7.8 and median_frame_motion >= 1.8)
+            is_clean_no_text = (avg_text_score <= 0.16)
+
+            # Find best timestamp offset inside this segment where the celebrity's face is clearest (for thumbnail!)
+            best_frame_item = max(w_slice, key=lambda x: (x["matched"], x["score"], x["similarity"]))
+            best_thumb_offset = max(0.3, min(adaptive_dur - 0.3, round(best_frame_item["time"] - start_t, 2)))
+
+            continuity_bonus = 1.4 if has_continuous_celeb else (0.6 if match_ratio >= 0.60 else 0.05)
+            motion_bonus = 1.35 if is_live_motion else 0.04
+            text_bonus = 1.25 if is_clean_no_text else (0.35 if avg_text_score <= 0.24 else 0.05)
             length_bonus = 1.0 + 0.06 * max(0.0, adaptive_dur - min_dur)
-            combined = avg_score * continuity_bonus * identity_bonus * length_bonus
+
+            combined = avg_score * continuity_bonus * motion_bonus * text_bonus * length_bonus
             candidates.append(
                 {
                     "start_sec": round(start_t, 2),
                     "end_sec": round(min(total_duration, end_t), 2),
                     "duration_sec": round(min(total_duration - start_t, adaptive_dur), 2),
+                    "best_thumb_offset_sec": best_thumb_offset,
                     "score": round(combined, 4),
                     "similarity": round(avg_sim, 3),
                     "face_ratio": round(face_ratio, 2),
                     "match_ratio": round(match_ratio, 2),
+                    "face_motion": round(median_face_motion, 2),
+                    "text_score": round(avg_text_score, 3),
+                    "is_live_motion": is_live_motion,
+                    "is_clean_no_text": is_clean_no_text,
+                    "has_continuous_celeb": has_continuous_celeb,
                 }
             )
 
-        candidates.sort(key=lambda x: (x["match_ratio"] >= 0.5, x["score"], x["similarity"]), reverse=True)
+        candidates.sort(
+            key=lambda x: (
+                x["has_continuous_celeb"] and x["is_live_motion"] and x["is_clean_no_text"],
+                x["has_continuous_celeb"] and x["is_live_motion"],
+                x["is_live_motion"] and x["match_ratio"] >= 0.65,
+                x["score"],
+                x["similarity"],
+            ),
+            reverse=True,
+        )
 
         selected: List[Dict[str, Any]] = []
         for cand in candidates:
-            # Ensure non-overlapping segments (at least 3.5s apart) so Scene 1 and Scene 2 of the same video are distinct!
             if any(abs(cand["start_sec"] - s["start_sec"]) < 3.8 for s in selected):
                 continue
             selected.append(cand)

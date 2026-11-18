@@ -10,46 +10,261 @@ HEADERS = {
 }
 
 
-def lookup_celebrity(name: str, save_dir: Optional[str] = None, target_clip_count: Optional[int] = None) -> Dict[str, Any]:
+def _parse_birth_death_years(text: str, current_year: int) -> tuple:
+    birth_year = None
+    death_year = None
+    span_match = re.search(r"\b(19\d{2}|20[01]\d)\s*[–—-]\s*(19\d{2}|20\d{2})\b", text or "")
+    if span_match:
+        birth_year = int(span_match.group(1))
+        death_year = int(span_match.group(2))
+    else:
+        b_match = re.search(
+            r"(?:born|b\.|\()\s*[^);\n]{0,40}?\b(19\d{2}|200\d)\b",
+            text or "",
+            flags=re.IGNORECASE,
+        )
+        if not b_match:
+            b_match = re.search(r"\b(19\d{2})\b", (text or "")[:300])
+        if b_match:
+            birth_year = int(b_match.group(1))
+
+        d_match = re.search(
+            r"(?:died|d\.|passed away|–|—)[^);\n]{0,45}?\b(19\d{2}|20\d{2})\b",
+            (text or "")[:800],
+            flags=re.IGNORECASE,
+        )
+        if d_match:
+            death_year = int(d_match.group(1))
+    return birth_year, death_year
+
+
+def _score_wikipedia_human_candidate(
+    title: str,
+    desc: str,
+    extract: str,
+    query_name: str,
+    rank_idx: int,
+) -> float:
     """
-    Look up celebrity info from Wikipedia, extract birth/death years, career years weighted by
-    actual prominence in their biography/filmography, and download multiple reference portrait images
-    for robust AI face verification across decades.
+    Score a Wikipedia page to ensure we select a REAL HUMAN CELEBRITY biography
+    (and never a generic concept like 'Prince = Son of a ruler' or a company like 'Pizza Hut').
+    """
+    t_low = (title or "").lower()
+    d_low = (desc or "").lower()
+    e_low = (extract or "")[:600].lower()
+    combined = f"{d_low} {e_low}"
+    q_low = (query_name or "").strip().lower()
+
+    # Strictly reject disambiguation pages, lists, death-of articles, bands/companies/restaurants/films/albums
+    if t_low.startswith("list of ") or t_low.startswith("death of ") or "in popular culture" in t_low:
+        return -500.0
+
+    hard_reject_phrases = [
+        "may refer to",
+        "disambiguation",
+        "restaurant chain",
+        "fast food",
+        "multinational",
+        "corporation",
+        "company",
+        "son of a ruler",
+        "title of nobility",
+        "monarch",
+        "studio album",
+        "discography",
+        "filmography",
+        "television series",
+        "video game",
+        "fictional character",
+    ]
+    if any(p in combined for p in hard_reject_phrases):
+        return -500.0
+
+    score = max(0.0, 20.0 - rank_idx * 2.0)
+
+    # Check if biography has birth/death years of a human
+    curr_yr = datetime.datetime.now().year
+    by, dy = _parse_birth_death_years(f"{desc}\n{extract}", curr_yr)
+    if by and 1880 <= by <= 2015:
+        score += 45.0
+    if dy and by and dy >= by + 18:
+        score += 20.0
+        if dy <= curr_yr and (f"–{dy}" in f"{desc} {extract}" or f"-{dy}" in f"{desc} {extract}" or "died" in combined or "was a" in combined or "was an" in combined):
+            score += 30.0
+
+    # Celebrity / Human profession keywords
+    person_keywords = [
+        "actor", "actress", "singer", "musician", "songwriter", "rapper", "comedian",
+        "entertainer", "filmmaker", "director", "producer", "composer", "artist",
+        "dancer", "performer", "television presenter", "host", "journalist", "author",
+        "writer", "politician", "player", "athlete", "boxer", "wrestler", "model",
+    ]
+    if any(k in combined for k in person_keywords):
+        score += 35.0
+
+    if any(tag in t_low for tag in ["(musician)", "(singer)", "(actor)", "(actress)", "(comedian)", "(entertainer)"]):
+        score += 30.0
+
+    # If user typed a single word like "Prince", prefer the musician/singer over British royalty unless user typed "Prince Charles/William/Philip"
+    if " " not in q_low and q_low == "prince":
+        if "musician" in combined or "singer" in combined:
+            score += 65.0
+        if any(r in combined for r in ["british royal", "duke of", "prince of wales", "queen elizabeth"]):
+            score -= 35.0
+
+    clean_title = re.sub(r"\s*\([^)]*\)\s*$", "", t_low).strip()
+    if clean_title == q_low:
+        score += 75.0
+    elif q_low in clean_title:
+        score += 20.0
+
+    return score
+
+
+def lookup_celebrity(
+    name: str,
+    save_dir: Optional[str] = None,
+    target_clip_count: Optional[int] = None,
+    exact_wiki_title: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Look up celebrity info from Wikipedia, automatically correcting typos (e.g., 'Michale Jackson' -> 'Michael Jackson')
+    and disambiguating human celebrities (e.g., 'Prince' -> 'Prince (musician)'), while returning alternative
+    human candidates for the user's Scan & Approve step.
     """
     clean_name = name.strip()
     current_year = datetime.datetime.now().year
+    search_url = "https://en.wikipedia.org/w/api.php"
 
-    wiki_title = clean_name
+    wiki_title = exact_wiki_title or clean_name
     summary_data = {}
     full_extract = ""
+    candidates_list: List[Dict[str, Any]] = []
 
     try:
-        # 1. Search Wikipedia for exact page title
-        search_url = "https://en.wikipedia.org/w/api.php"
+        candidate_titles: List[str] = []
+        if exact_wiki_title:
+            candidate_titles.append(exact_wiki_title)
+
+        # 1. Search Wikipedia with typo suggestion enabled
         r = requests.get(
             search_url,
             params={
                 "action": "query",
                 "list": "search",
                 "srsearch": clean_name,
+                "srinfo": "suggestion",
                 "format": "json",
-                "srlimit": 3,
+                "srlimit": 8,
             },
             headers=HEADERS,
             timeout=8,
         )
+        suggestion = None
         if r.ok:
-            s_hits = r.json().get("query", {}).get("search", [])
-            if s_hits:
-                wiki_title = s_hits[0]["title"]
+            q_data = r.json().get("query", {})
+            suggestion = (q_data.get("searchinfo") or {}).get("suggestion")
+            for h in q_data.get("search", []):
+                if h.get("title") and h["title"] not in candidate_titles:
+                    candidate_titles.append(h["title"])
 
-        # 2. Fetch REST summary
+        # If Wikipedia suggested a typo fix (e.g. "Michale Jackson" -> "michael jackson"), append suggested hits
+        has_exact_hit = any(re.sub(r"\s*\([^)]*\)\s*$", "", t.lower()).strip() == clean_name.lower() for t in candidate_titles)
+        if suggestion:
+            r_sug = requests.get(
+                search_url,
+                params={
+                    "action": "query",
+                    "list": "search",
+                    "srsearch": suggestion,
+                    "format": "json",
+                    "srlimit": 5,
+                },
+                headers=HEADERS,
+                timeout=6,
+            )
+            if r_sug.ok:
+                for h in r_sug.json().get("query", {}).get("search", []):
+                    if h.get("title") and h["title"] not in candidate_titles:
+                        if has_exact_hit:
+                            candidate_titles.append(h["title"])
+                        else:
+                            candidate_titles.insert(0, h["title"])
+
+        # For single-word queries (like "Prince", "Madonna", "Cher"), also probe musician/actor disambiguations
+        if " " not in clean_name:
+            for suffix in ["(musician)", "(singer)", "(actor)", "(actress)"]:
+                probe_t = f"{clean_name.capitalize()} {suffix}"
+                if probe_t not in candidate_titles:
+                    candidate_titles.insert(0, probe_t)
+
+        effective_query = clean_name if has_exact_hit else (suggestion or clean_name)
+
+        # 2. Batch-fetch intro extracts, descriptions, and thumbnails for candidate titles in 1 fast request
+        batch_titles = candidate_titles[:10]
+        if batch_titles:
+            r_batch = requests.get(
+                search_url,
+                params={
+                    "action": "query",
+                    "prop": "pageprops|pageimages|extracts",
+                    "exintro": 1,
+                    "explaintext": 1,
+                    "piprop": "thumbnail",
+                    "pithumbsize": 300,
+                    "redirects": 1,
+                    "titles": "|".join(batch_titles),
+                    "format": "json",
+                },
+                headers=HEADERS,
+                timeout=8,
+            )
+            if r_batch.ok:
+                pages = r_batch.json().get("query", {}).get("pages", {})
+                scored_cands = []
+                for pid, pinfo in pages.items():
+                    if int(pid) < 0 or "missing" in pinfo:
+                        continue
+                    pt = pinfo.get("title") or ""
+                    pdesc = (pinfo.get("pageprops") or {}).get("wikibase-shortdesc") or ""
+                    pext = pinfo.get("extract") or ""
+                    pthumb = (pinfo.get("thumbnail") or {}).get("source") or ""
+                    sc = _score_wikipedia_human_candidate(
+                        pt,
+                        pdesc,
+                        pext,
+                        query_name=effective_query,
+                        rank_idx=batch_titles.index(pt) if pt in batch_titles else 5,
+                    )
+                    if exact_wiki_title and pt.lower() == exact_wiki_title.lower():
+                        sc += 1000.0
+                    if sc > -100.0:
+                        c_by, c_dy = _parse_birth_death_years(f"{pdesc}\n{pext}", current_year)
+                        scored_cands.append(
+                            {
+                                "score": sc,
+                                "title": pt,
+                                "wiki_title": pt,
+                                "name": re.sub(r"\s*\([^)]*\)\s*$", "", pt).strip() or pt,
+                                "summary": pdesc or (pext[:120] + "..." if pext else ""),
+                                "description": pdesc or (pext[:120] + "..." if pext else ""),
+                                "birth_year": c_by or 1955,
+                                "death_year": c_dy or current_year,
+                                "thumb_url": pthumb,
+                            }
+                        )
+                scored_cands.sort(key=lambda x: x["score"], reverse=True)
+                candidates_list = scored_cands[:6]
+                if candidates_list and not exact_wiki_title:
+                    wiki_title = candidates_list[0]["wiki_title"]
+
+        # 3. Fetch REST summary for the chosen wiki_title
         rest_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{requests.utils.quote(wiki_title)}"
         r_sum = requests.get(rest_url, headers=HEADERS, timeout=8)
         if r_sum.ok:
             summary_data = r_sum.json()
 
-        # 3. Fetch full plain-text extract (including Career & Filmography sections)
+        # 4. Fetch full plain-text extract (including Career & Filmography sections)
         r_ext = requests.get(
             search_url,
             params={
@@ -70,38 +285,14 @@ def lookup_celebrity(name: str, save_dir: Optional[str] = None, target_clip_coun
     except Exception:
         pass
 
-    canonical_name = summary_data.get("title") or clean_name
-    canonical_name = re.sub(r"\s*\([^)]*\)\s*$", "", canonical_name).strip() or clean_name
+    raw_wiki_title = summary_data.get("title") or wiki_title
+    canonical_name = re.sub(r"\s*\([^)]*\)\s*$", "", raw_wiki_title).strip() or clean_name
     description = summary_data.get("description") or ""
     extract = summary_data.get("extract") or ""
     combined_bio = f"{description}\n{extract}\n{full_extract[:2000]}"
 
     # Parse birth year & death year
-    birth_year = None
-    death_year = None
-
-    span_match = re.search(r"\b(19\d{2}|20[01]\d)\s*[–—-]\s*(19\d{2}|20\d{2})\b", combined_bio)
-    if span_match:
-        birth_year = int(span_match.group(1))
-        death_year = int(span_match.group(2))
-    else:
-        b_match = re.search(
-            r"(?:born|b\.)[^);\n]{0,40}?\b(19\d{2}|200\d)\b",
-            combined_bio,
-            flags=re.IGNORECASE,
-        )
-        if not b_match:
-            b_match = re.search(r"\b(19\d{2})\b", combined_bio[:300])
-        if b_match:
-            birth_year = int(b_match.group(1))
-
-        d_match = re.search(
-            r"(?:died|d\.|passed away)[^);\n]{0,45}?\b(19\d{2}|20\d{2})\b",
-            combined_bio[:800],
-            flags=re.IGNORECASE,
-        )
-        if d_match:
-            death_year = int(d_match.group(1))
+    birth_year, death_year = _parse_birth_death_years(combined_bio, current_year)
 
     if not birth_year or birth_year < 1900 or birth_year > current_year - 15:
         birth_year = 1955
@@ -197,8 +388,28 @@ def lookup_celebrity(name: str, save_dir: Optional[str] = None, target_clip_coun
             except Exception:
                 continue
 
+    youtube_forbidden_terms: List[str] = []
+    if canonical_name.lower() == "prince" and any(k in combined_bio.lower() for k in ["musician", "singer", "songwriter"]):
+        youtube_forbidden_terms = [
+            "prince charles",
+            "prince of wales",
+            "prince william",
+            "prince harry",
+            "prince philip",
+            "prince andrew",
+            "prince edward",
+            "princess diana",
+            "happy prince",
+            "royal family",
+        ]
+
+    auto_corrected_from = clean_name if canonical_name.lower() != clean_name.lower() and not exact_wiki_title else None
+
     return {
         "name": canonical_name,
+        "wiki_title": raw_wiki_title,
+        "input_query": clean_name,
+        "auto_corrected_from": auto_corrected_from,
         "description": description,
         "extract": extract,
         "birth_year": birth_year,
@@ -209,6 +420,8 @@ def lookup_celebrity(name: str, save_dir: Optional[str] = None, target_clip_coun
         "recommended_years": recommended_years,
         "notable_years": notable_years,
         "year_counts": dict(year_counter),
+        "candidates": candidates_list,
+        "youtube_forbidden_terms": youtube_forbidden_terms,
     }
 
 

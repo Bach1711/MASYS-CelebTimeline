@@ -53,63 +53,17 @@
           </div>
         </div>
 
-        <!-- Inputs: Name + Output Folder -->
-        <div class="flex items-start gap-3 flex-1 min-w-[300px] max-w-2xl flex-wrap sm:flex-nowrap">
-          <div class="flex-1 min-w-[210px]">
-            <div class="flex items-center justify-between mb-1">
-              <label for="celebNameInput" class="block text-xs font-semibold text-slate-600">
-                1. Tên người nổi tiếng <span class="text-slate-400 font-normal">(1 hoặc nhiều tên)</span>
-              </label>
-              <button
-                id="btnToggleBatchInput"
-                type="button"
-                onclick="toggleBatchInputMode()"
-                class="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 hover:underline cursor-pointer"
-                title="Chuyển sang khung nhập nhiều dòng để dán danh sách nhiều người nổi tiếng chạy hàng loạt"
-              >
-                📋 Nhập nhiều dòng
-              </button>
-            </div>
-            <div id="singleCelebInputWrap" class="flex gap-1.5">
-              <input
-                id="celebNameInput"
-                type="text"
-                value="Catherine O'Hara"
-                placeholder="Nhập 1 tên hoặc nhiều tên cách nhau dấu phẩy (VD: Catherine O'Hara, Matthew Perry)..."
-                onchange="onCelebNameChange()"
-                class="w-full px-3 py-2 rounded-lg bg-slate-50 border border-slate-300 text-slate-900 text-sm font-semibold focus:outline-none focus:border-blue-500 focus:bg-white transition"
-              />
-              <button
-                id="btnLookupCeleb"
-                type="button"
-                onclick="lookupCelebYears(true)"
-                class="px-2.5 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 text-xs font-semibold shrink-0 transition cursor-pointer"
-                title="Tra cứu Wikipedia để tự động lấy năm sinh/mất và thay thế bằng các mốc năm của nhân vật mới"
-              >
-                🔍 Tra năm
-              </button>
-            </div>
-            <div id="batchCelebInputWrap" class="hidden space-y-1">
-              <textarea
-                id="celebBatchTextarea"
-                rows="3"
-                placeholder="Nhập danh sách nhân vật (mỗi dòng 1 tên hoặc cách nhau bằng dấu phẩy):&#10;Catherine O'Hara&#10;Matthew Perry&#10;Alan Rickman"
-                class="w-full px-3 py-2 rounded-lg bg-slate-50 border border-indigo-300 text-slate-900 text-xs font-semibold focus:outline-none focus:border-indigo-600 focus:bg-white transition"
-              ></textarea>
-              <div class="text-[11px] text-indigo-700 font-medium">
-                💡 Khi nhập từ 2 nhân vật trở lên, bấm <strong>🚀 1. Tạo Video</strong> sẽ tự động chạy một mạch (Tìm & Cắt + Xuất luôn file MP4) cho từng người!
-              </div>
-            </div>
-          </div>
-          <div class="flex-1 min-w-[220px]">
-            <label for="outputFolderInput" class="block text-xs font-semibold text-slate-600 mb-1">2. Thư mục lưu video đầu ra</label>
+        <!-- Output Folder + Main Action Buttons -->
+        <div class="flex items-end gap-3 flex-wrap">
+          <div class="min-w-[240px]">
+            <label for="outputFolderInput" class="block text-xs font-semibold text-slate-600 mb-1">📂 Thư mục lưu video đầu ra (Output)</label>
             <div class="flex gap-1.5">
               <input
                 id="outputFolderInput"
                 type="text"
                 value="D:\TikTok_Videos\Output"
                 placeholder="D:\TikTok_Videos\Output"
-                class="w-full px-3 py-2 rounded-lg bg-slate-50 border border-slate-300 text-slate-700 text-sm font-mono focus:outline-none focus:border-blue-500 focus:bg-white transition"
+                class="w-full px-3 py-2 rounded-lg bg-slate-50 border border-slate-300 text-slate-700 text-xs font-mono focus:outline-none focus:border-blue-500 focus:bg-white transition"
               />
               <button
                 id="btnPickFolder"
@@ -122,41 +76,88 @@
               </button>
             </div>
           </div>
-        </div>
 
-        <!-- Main Action Buttons -->
-        <div class="flex items-center gap-2 flex-wrap">
-          <button
-            id="btnStartPipeline"
-            type="button"
-            onclick="startPipeline()"
-            class="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-bold shadow-sm transition cursor-pointer"
-          >
-            🚀 1. Tạo Video (Tìm & Cắt)
-          </button>
-          <button
-            id="btnRenderFinal"
-            type="button"
-            onclick="renderFinalVideo()"
-            class="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-bold shadow-sm transition cursor-pointer"
-          >
-            <span id="btnRenderLabel">💾 2. Xuất MP4</span>
-            <span id="btnExportDuration"></span>
-          </button>
-          <button
-            id="btnClearAll"
-            type="button"
-            onclick="clearAllStoryboard()"
-            class="px-3 py-2.5 rounded-xl bg-slate-100 hover:bg-rose-50 border border-slate-300 hover:border-rose-300 text-slate-700 hover:text-rose-700 text-xs font-bold transition cursor-pointer"
-            title="Xóa sạch toàn bộ các cảnh trên bảng lưới để làm mới"
-          >
-            🗑️ Clear tất cả
-          </button>
+          <div class="flex items-center gap-2 flex-wrap">
+            <button
+              id="btnScanCelebs"
+              type="button"
+              onclick="scanAllTableRows()"
+              class="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 text-xs font-black shadow-sm transition cursor-pointer"
+              title="Quét thông tin Wikipedia, sửa lỗi chính tả và duyệt đúng nhân vật trước khi tạo video"
+            >
+              🔍 1. Quét Nhân Vật
+            </button>
+            <button
+              id="btnStartPipeline"
+              type="button"
+              onclick="startPipeline()"
+              class="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold shadow-sm transition cursor-pointer"
+              title="Tìm & Cắt video cho toàn bộ các nhân vật đã nhập trong bảng"
+            >
+              🚀 2. Tạo Video (Tìm & Cắt)
+            </button>
+            <button
+              id="btnRenderFinal"
+              type="button"
+              onclick="renderFinalVideo()"
+              class="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold shadow-sm transition cursor-pointer"
+              title="Xuất file MP4 cho Tab nhân vật đang mở sau khi bạn đã kiểm nghiệm các cảnh"
+            >
+              <span id="btnRenderLabel">💾 3. Xuất Video</span>
+              <span id="btnExportDuration"></span>
+            </button>
+            <button
+              id="btnClearAll"
+              type="button"
+              onclick="clearAllStoryboard()"
+              class="px-3 py-2.5 rounded-xl bg-slate-100 hover:bg-rose-50 border border-slate-300 hover:border-rose-300 text-slate-700 hover:text-rose-700 text-xs font-bold transition cursor-pointer"
+              title="Xóa sạch bảng nhập và toàn bộ các cảnh trên bảng lưới để làm mới"
+            >
+              🗑️ Clear tất cả
+            </button>
+          </div>
         </div>
       </div>
 
-      <!-- Dynamic Celebrity Years Bar -->
-      <div class="pt-2.5 border-t border-slate-100 flex items-center justify-between gap-3 flex-wrap text-xs">
+      <!-- 3-to-20 Row Celebrity Input & Disambiguation Approval Table -->
+      <div class="pt-2 border-t border-slate-100 space-y-2">
+        <div class="flex items-center justify-between gap-2 flex-wrap">
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-bold text-slate-800">📋 Bảng Nhập & Duyệt Nhân Vật</span>
+            <span class="text-[11px] text-slate-500">
+              (Điền bao nhiêu hàng thì quét & làm bấy nhiêu người • Hỗ trợ dán nhiều dòng cùng lúc • Bấm <strong>🔍 1. Quét Nhân Vật</strong> để duyệt đúng người trước khi chạy)
+            </span>
+          </div>
+          <button
+            id="btnToggleTableRows"
+            type="button"
+            onclick="toggleTableExpand()"
+            class="px-3 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 text-xs font-bold transition cursor-pointer"
+          >
+            🔽 Mở rộng bảng (20 hàng)
+          </button>
+        </div>
+
+        <div id="celebTableScrollWrap" class="border border-slate-200 rounded-xl overflow-hidden bg-slate-50 max-h-80 overflow-y-auto">
+          <table class="w-full text-left border-collapse text-xs">
+            <thead class="bg-slate-100 text-slate-600 border-b border-slate-200 sticky top-0 z-10">
+              <tr>
+                <th class="py-2 px-2.5 w-10 text-center font-bold">#</th>
+                <th class="py-2 px-2.5 w-60 font-bold">Tên nhân vật nhập vào</th>
+                <th class="py-2 px-2.5 font-bold">Thông tin Nhân vật Quét được & Chọn Duyệt (Wikipedia AI)</th>
+                <th class="py-2 px-2.5 w-64 font-bold">📅 Mốc năm (tự động / sửa tùy ý)</th>
+                <th class="py-2 px-2 w-10 text-center font-bold">Xóa</th>
+              </tr>
+            </thead>
+            <tbody id="celebTableBody" class="divide-y divide-slate-200 bg-white">
+              <!-- Populated dynamically by JS (3 rows initially, expandable to 20 rows) -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Active Tab Celebrity Summary Bar -->
+      <div class="pt-2 border-t border-slate-100 flex items-center justify-between gap-3 flex-wrap text-xs">
         <div class="flex items-center gap-2.5">
           <img
             id="celebPortraitThumb"
@@ -165,17 +166,18 @@
             class="w-7 h-7 rounded-full object-cover border border-amber-400 bg-slate-200 shrink-0"
           />
           <div>
-            <span class="font-bold text-slate-800" id="celebMetaName">Catherine O'Hara</span>
+            <span class="text-slate-500 text-[11px]">Đang xem Tab:</span>
+            <span class="font-bold text-slate-900 ml-1" id="celebMetaName">Catherine O'Hara</span>
             <span class="text-slate-500 ml-1" id="celebMetaSpan">(Tự động lấy mốc năm & thời lượng linh hoạt ~1 phút)</span>
           </div>
         </div>
-        <div class="flex items-center gap-2 flex-1 max-w-2xl">
-          <label for="yearsListInput" class="text-slate-600 font-semibold shrink-0">📅 Mốc năm (tự động theo nhân vật / sửa tùy ý):</label>
+        <div class="flex items-center gap-2 flex-1 max-w-xl">
+          <label for="yearsListInput" class="text-slate-600 font-semibold shrink-0">📅 Mốc năm của Tab đang mở:</label>
           <input
             id="yearsListInput"
             type="text"
             value=""
-            placeholder="Để trống để tự động chọn các mốc năm tiêu biểu của nhân vật..."
+            placeholder="Tự động theo nhân vật..."
             class="flex-1 px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-300 text-slate-800 font-mono text-xs focus:outline-none focus:border-blue-500 focus:bg-white"
           />
         </div>
@@ -440,22 +442,39 @@
       </div>
     </div>
 
-    <!-- Batch Switcher Bar (Visible when running/reviewing multiple celebrities in Batch Mode) -->
+    <!-- Batch Switcher Bar (Visible right after Scanning or Running 1+ celebrities) -->
     <div
       id="batchSwitcherBar"
       class="hidden bg-white border-2 border-indigo-200 rounded-xl p-3.5 shadow-xs space-y-2.5"
     >
       <div class="flex items-center justify-between gap-2 flex-wrap">
-        <div class="flex items-center gap-2">
-          <span class="px-2.5 py-0.5 rounded-lg bg-indigo-600 text-white font-bold text-xs">📚 CHẠY HÀNG LOẠT</span>
-          <span id="batchSummaryText" class="text-xs font-bold text-slate-800">Đang xử lý...</span>
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="px-2.5 py-0.5 rounded-lg bg-indigo-600 text-white font-bold text-xs">📑 DANH SÁCH TAB NHÂN VẬT</span>
+          <span id="batchSummaryText" class="text-xs font-bold text-slate-800">Đã quét nhân vật — Bấm vào từng Tab để xem tiến độ & kiểm nghiệm video</span>
         </div>
-        <div class="flex items-center gap-2">
-          <span class="text-[11px] text-slate-500">💡 Bấm vào tên nhân vật bất kỳ bên dưới để xem bảng lưới, đổi cảnh và xuất lại MP4:</span>
+        <div class="flex items-center gap-2 flex-wrap">
+          <button
+            id="btnRenderCurrentTabQuick"
+            type="button"
+            onclick="renderFinalVideo()"
+            class="hidden px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs cursor-pointer transition"
+            title="Xuất file MP4 cho riêng Tab nhân vật đang mở"
+          >
+            💾 Xuất Video Tab này
+          </button>
+          <button
+            id="btnRenderAllBatch"
+            type="button"
+            onclick="renderAllBatchVideos()"
+            class="hidden px-3.5 py-1.5 rounded-lg bg-teal-700 hover:bg-teal-800 disabled:opacity-50 text-white text-xs font-black shadow-xs cursor-pointer transition"
+            title="Xuất hàng loạt tất cả các Tab nhân vật đã cắt xong ra file MP4"
+          >
+            💾 Xuất Tất Cả MP4
+          </button>
           <button
             type="button"
             onclick="openOutputFolder()"
-            class="px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 text-xs font-bold cursor-pointer"
+            class="px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 text-xs font-bold cursor-pointer"
           >
             📂 Mở thư mục Output
           </button>
@@ -479,10 +498,30 @@
     let currentBatch = null;
     let batchPollTimer = null;
     let batchFollowActive = true;
-    let isBatchInputExpanded = false;
     let lastExportedPath = "";
     let lastLookedUpCeleb = "";
     let folderBrowserParentPath = "";
+
+    // --- 3-to-20 Row Table State ---
+    const MAX_TABLE_ROWS = 20;
+    let visibleRowsCount = 3;
+    let activeTableRowIdx = 0;
+    let tableRowsData = Array.from({ length: MAX_TABLE_ROWS }, () => ({
+      name: "",
+      wiki_title: null,
+      years_str: "",
+      scanned_info: null,
+      project_id: null,
+      is_scanning: false
+    }));
+
+    function escapeHtml(str) {
+      return String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
 
     function formatMMSS(sec) {
       const s = Math.max(0, Math.round(Number(sec) || 0));
@@ -497,57 +536,408 @@
       return `${formatMMSS(st)} - ${formatMMSS(st + du)}`;
     }
 
-    function toggleBatchInputMode() {
-      isBatchInputExpanded = !isBatchInputExpanded;
-      const singleWrap = document.getElementById('singleCelebInputWrap');
-      const batchWrap = document.getElementById('batchCelebInputWrap');
-      const btn = document.getElementById('btnToggleBatchInput');
-      const singleIn = document.getElementById('celebNameInput');
-      const batchIn = document.getElementById('celebBatchTextarea');
-
-      if (isBatchInputExpanded) {
-        if (singleIn.value.trim() && !batchIn.value.trim()) {
-          batchIn.value = singleIn.value.split(/[,;\n]+/).map(x => x.trim()).filter(Boolean).join('\n');
-        }
-        singleWrap.classList.add('hidden');
-        batchWrap.classList.remove('hidden');
-        btn.innerText = '👤 Nhập 1 dòng';
-        batchIn.focus();
-      } else {
-        const lines = batchIn.value.split(/[,;\n]+/).map(x => x.trim()).filter(Boolean);
-        if (lines.length) {
-          singleIn.value = lines.join(', ');
-        }
-        batchWrap.classList.add('hidden');
-        singleWrap.classList.remove('hidden');
-        btn.innerText = '📋 Nhập nhiều dòng';
-      }
-    }
-
-    function parseCelebNamesInput() {
-      const raw = isBatchInputExpanded
-        ? (document.getElementById('celebBatchTextarea').value || '')
-        : (document.getElementById('celebNameInput').value || '');
-      const seen = new Set();
-      const names = [];
-      for (const part of raw.split(/[\n,;]+/)) {
-        const clean = part.trim();
-        if (clean && !seen.has(clean.toLowerCase())) {
-          seen.add(clean.toLowerCase());
-          names.append ? names.append(clean) : names.push(clean);
-        }
-      }
-      return names;
-    }
-
-    function parseYearsInput() {
-      const raw = (document.getElementById('yearsListInput').value || '').trim();
+    function parseYearsFromStr(rawStr) {
+      const raw = String(rawStr || '').trim();
       if (!raw) return null;
       const arr = raw
         .split(/[,;\s]+/)
         .map(s => parseInt(s.trim(), 10))
         .filter(n => !isNaN(n) && n >= 1930 && n <= 2030);
       return arr.length ? arr : null;
+    }
+
+    function parseYearsInput() {
+      return parseYearsFromStr(document.getElementById('yearsListInput').value);
+    }
+
+    function toggleTableExpand() {
+      visibleRowsCount = (visibleRowsCount === 3) ? MAX_TABLE_ROWS : 3;
+      const btn = document.getElementById('btnToggleTableRows');
+      if (btn) {
+        btn.innerText = (visibleRowsCount === MAX_TABLE_ROWS)
+          ? '🔼 Thu gọn bảng (3 hàng)'
+          : '🔽 Mở rộng bảng (20 hàng)';
+      }
+      renderCelebTable();
+    }
+
+    function getFilledTableRows() {
+      const out = [];
+      for (let i = 0; i < MAX_TABLE_ROWS; i++) {
+        const clean = (tableRowsData[i].name || '').trim();
+        if (clean) {
+          out.push({ rowIdx: i, row: tableRowsData[i] });
+        }
+      }
+      return out;
+    }
+
+    function renderCelebTable() {
+      const tbody = document.getElementById('celebTableBody');
+      if (!tbody) return;
+
+      // Always show at least enough rows to cover any filled row
+      let highestFilled = 0;
+      for (let i = 0; i < MAX_TABLE_ROWS; i++) {
+        if ((tableRowsData[i].name || '').trim()) highestFilled = i + 1;
+      }
+      const rowsToShow = Math.max(visibleRowsCount, highestFilled > 3 ? MAX_TABLE_ROWS : 3);
+      if (rowsToShow !== visibleRowsCount) {
+        visibleRowsCount = rowsToShow;
+        const btn = document.getElementById('btnToggleTableRows');
+        if (btn) {
+          btn.innerText = (visibleRowsCount === MAX_TABLE_ROWS)
+            ? '🔼 Thu gọn bảng (3 hàng)'
+            : '🔽 Mở rộng bảng (20 hàng)';
+        }
+      }
+
+      let html = '';
+      for (let i = 0; i < visibleRowsCount; i++) {
+        const r = tableRowsData[i];
+        const isActiveRow = (i === activeTableRowIdx && (r.name || '').trim() !== '');
+        const rowBg = isActiveRow ? 'bg-indigo-50/50' : 'hover:bg-slate-50';
+
+        let infoCellHtml = '';
+        if (r.is_scanning) {
+          infoCellHtml = `
+            <div class="flex items-center gap-2 text-amber-700 font-semibold animate-pulse py-1">
+              <span>⏳ Đang quét Wikipedia & phân tích tiểu sử nhân vật...</span>
+            </div>
+          `;
+        } else if (r.scanned_info) {
+          const info = r.scanned_info;
+          const thumbUrl = info.local_portrait_url || info.portrait_url || '';
+          const candidates = info.candidates || [];
+          const correctedBanner = info.auto_corrected_from
+            ? `<span class="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-bold" title="Đã tự động sửa lỗi chính tả từ '${escapeHtml(info.auto_corrected_from)}'">✨ Đã sửa: ${escapeHtml(info.auto_corrected_from)} ➔ ${escapeHtml(info.name)}</span>`
+            : `<span class="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200 text-[10px] font-bold">✔ Đã duyệt</span>`;
+
+          const optionsHtml = candidates.map(c => {
+            const sel = (c.wiki_title === (r.wiki_title || info.wiki_title)) ? 'selected' : '';
+            const spanTxt = c.birth_year ? ` (${c.birth_year}–${c.death_year || 'nay'})` : '';
+            const descTxt = c.summary ? ` — ${c.summary.slice(0, 75)}...` : '';
+            return `<option value="${escapeHtml(c.wiki_title)}" ${sel}>${escapeHtml(c.title)}${spanTxt}${escapeHtml(descTxt)}</option>`;
+          }).join('');
+
+          infoCellHtml = `
+            <div class="flex items-center gap-2.5 py-0.5">
+              <img
+                src="${escapeHtml(thumbUrl)}"
+                onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'32\\' height=\\'32\\'><rect width=\\'100%\\' height=\\'100%\\' fill=\\'%23cbd5e1\\'/></svg>'"
+                class="w-8 h-8 rounded-full object-cover border border-amber-400 bg-slate-200 shrink-0"
+              />
+              <div class="flex-1 min-w-0 space-y-1">
+                <div class="flex items-center gap-1.5 flex-wrap">
+                  ${correctedBanner}
+                  <span class="font-bold text-slate-900 text-xs">${escapeHtml(info.name)}</span>
+                  <span class="text-[11px] text-slate-500 font-mono">(${info.birth_year}–${info.death_year})</span>
+                </div>
+                ${candidates.length > 0 ? `
+                <div class="flex items-center gap-1.5">
+                  <span class="text-[10px] font-semibold text-slate-500 shrink-0">Đổi người nếu trùng tên:</span>
+                  <select
+                    onchange="onRowCandidateSelect(${i}, this.value)"
+                    class="flex-1 max-w-md px-2 py-0.5 rounded border border-slate-300 bg-white text-slate-800 text-[11px] font-medium focus:outline-none focus:border-indigo-500 cursor-pointer truncate"
+                  >
+                    ${optionsHtml}
+                  </select>
+                </div>` : ''}
+              </div>
+            </div>
+          `;
+        } else if ((r.name || '').trim()) {
+          infoCellHtml = `
+            <div class="flex items-center justify-between gap-2 text-slate-500 py-1">
+              <span class="text-[11px] italic">Chưa quét — Bấm <strong>"🔍 1. Quét Nhân Vật"</strong> để kiểm tra & duyệt đúng người</span>
+              <button
+                type="button"
+                onclick="scanSingleTableRow(${i})"
+                class="px-2 py-0.5 rounded bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-900 text-[11px] font-bold cursor-pointer shrink-0"
+              >
+                🔍 Quét hàng này
+              </button>
+            </div>
+          `;
+        } else {
+          infoCellHtml = `<span class="text-[11px] text-slate-400 italic">Nhập tên người nổi tiếng ở cột bên trái...</span>`;
+        }
+
+        html += `
+          <tr class="${rowBg} transition">
+            <td class="py-1.5 px-2.5 text-center font-mono font-bold text-slate-500">${i + 1}</td>
+            <td class="py-1.5 px-2.5">
+              <input
+                id="tableRowName_${i}"
+                type="text"
+                value="${escapeHtml(r.name)}"
+                placeholder="VD: Michael Jackson, Prince..."
+                oninput="onRowNameInput(${i}, this.value)"
+                onpaste="onRowPaste(event, ${i})"
+                onkeydown="if(event.key==='Enter'){event.preventDefault(); scanSingleTableRow(${i});}"
+                class="w-full px-2.5 py-1.5 rounded-lg bg-slate-50 border border-slate-300 text-slate-900 font-semibold text-xs focus:outline-none focus:border-blue-500 focus:bg-white"
+              />
+            </td>
+            <td class="py-1.5 px-2.5">${infoCellHtml}</td>
+            <td class="py-1.5 px-2.5">
+              <input
+                id="tableRowYears_${i}"
+                type="text"
+                value="${escapeHtml(r.years_str)}"
+                placeholder="Tự động sau khi quét..."
+                oninput="onRowYearsInput(${i}, this.value)"
+                class="w-full px-2 py-1.5 rounded-lg bg-slate-50 border border-slate-300 text-slate-700 font-mono text-[11px] focus:outline-none focus:border-blue-500 focus:bg-white"
+              />
+            </td>
+            <td class="py-1.5 px-2 text-center">
+              ${(r.name || '').trim() ? `
+              <button
+                type="button"
+                onclick="clearTableRow(${i})"
+                class="px-2 py-1 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600 font-bold text-xs cursor-pointer"
+                title="Xóa hàng #${i + 1}"
+              >
+                ✕
+              </button>` : ''}
+            </td>
+          </tr>
+        `;
+      }
+      tbody.innerHTML = html;
+    }
+
+    function onRowNameInput(rowIdx, val) {
+      const prevName = (tableRowsData[rowIdx].name || '').trim().toLowerCase();
+      tableRowsData[rowIdx].name = val;
+      const newName = (val || '').trim().toLowerCase();
+      if (prevName !== newName) {
+        tableRowsData[rowIdx].wiki_title = null;
+        tableRowsData[rowIdx].scanned_info = null;
+        tableRowsData[rowIdx].project_id = null;
+      }
+    }
+
+    function onRowYearsInput(rowIdx, val) {
+      tableRowsData[rowIdx].years_str = val;
+      if (rowIdx === activeTableRowIdx) {
+        document.getElementById('yearsListInput').value = val;
+      }
+    }
+
+    function onRowPaste(event, startRowIdx) {
+      const clipText = (event.clipboardData || window.clipboardData).getData('text') || '';
+      const lines = clipText.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      if (lines.length <= 1) return; // Normal single-line paste
+      event.preventDefault();
+      for (let k = 0; k < lines.length && (startRowIdx + k) < MAX_TABLE_ROWS; k++) {
+        const idx = startRowIdx + k;
+        tableRowsData[idx].name = lines[k];
+        tableRowsData[idx].wiki_title = null;
+        tableRowsData[idx].scanned_info = null;
+        tableRowsData[idx].project_id = null;
+      }
+      if (startRowIdx + lines.length > 3) {
+        visibleRowsCount = MAX_TABLE_ROWS;
+      }
+      renderCelebTable();
+    }
+
+    function clearTableRow(rowIdx) {
+      tableRowsData[rowIdx] = {
+        name: "",
+        wiki_title: null,
+        years_str: "",
+        scanned_info: null,
+        project_id: null,
+        is_scanning: false
+      };
+      renderCelebTable();
+      syncScannedTabsFromTable();
+    }
+
+    async function scanSingleTableRow(rowIdx, exactWikiTitle = null) {
+      const row = tableRowsData[rowIdx];
+      const rawName = (row.name || '').trim();
+      if (!rawName && !exactWikiTitle) return null;
+
+      row.is_scanning = true;
+      renderCelebTable();
+
+      try {
+        const res = await fetch('/api/lookup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: rawName || exactWikiTitle,
+            exact_wiki_title: exactWikiTitle || null
+          })
+        });
+        if (!res.ok) return null;
+        const info = await res.json();
+        row.scanned_info = info;
+        row.wiki_title = info.wiki_title || info.name;
+        if (info.recommended_years && info.recommended_years.length) {
+          row.years_str = info.recommended_years.join(', ');
+        }
+        activeTableRowIdx = rowIdx;
+        applyScannedInfoToPreview(rowIdx);
+        syncScannedTabsFromTable();
+        return info;
+      } catch (e) {
+        console.error(e);
+        return null;
+      } finally {
+        row.is_scanning = false;
+        renderCelebTable();
+      }
+    }
+
+    async function onRowCandidateSelect(rowIdx, selectedWikiTitle) {
+      if (!selectedWikiTitle) return;
+      tableRowsData[rowIdx].wiki_title = selectedWikiTitle;
+      tableRowsData[rowIdx].project_id = null;
+      await scanSingleTableRow(rowIdx, selectedWikiTitle);
+    }
+
+    async function scanAllTableRows() {
+      const filled = getFilledTableRows();
+      if (!filled.length) {
+        alert('Vui lòng nhập ít nhất 1 tên người nổi tiếng vào bảng trước khi bấm Quét!');
+        return false;
+      }
+
+      const btnScan = document.getElementById('btnScanCelebs');
+      if (btnScan) {
+        btnScan.disabled = true;
+        btnScan.innerText = `⏳ Đang quét (${filled.length} người)...`;
+      }
+
+      filled.forEach(({ row }) => { row.is_scanning = true; });
+      renderCelebTable();
+
+      try {
+        const payloadItems = filled.map(({ rowIdx, row }) => ({
+          row_index: rowIdx,
+          name: row.name.trim(),
+          exact_wiki_title: row.wiki_title || null
+        }));
+
+        const res = await fetch('/api/lookup-batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items: payloadItems })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.detail || 'Lỗi khi quét danh sách nhân vật');
+        }
+
+        const results = data.items || [];
+        results.forEach(info => {
+          const rIdx = (typeof info.row_index === 'number') ? info.row_index : 0;
+          if (tableRowsData[rIdx]) {
+            tableRowsData[rIdx].scanned_info = info;
+            tableRowsData[rIdx].wiki_title = info.wiki_title || info.name;
+            if (info.recommended_years && info.recommended_years.length) {
+              tableRowsData[rIdx].years_str = info.recommended_years.join(', ');
+            }
+          }
+        });
+
+        activeTableRowIdx = filled[0].rowIdx;
+        applyScannedInfoToPreview(activeTableRowIdx);
+        syncScannedTabsFromTable();
+        return true;
+      } catch (e) {
+        alert('Lỗi quét nhân vật: ' + e.message);
+        return false;
+      } finally {
+        filled.forEach(({ row }) => { row.is_scanning = false; });
+        renderCelebTable();
+        if (btnScan) {
+          btnScan.disabled = false;
+          btnScan.innerText = '🔍 1. Quét Nhân Vật';
+        }
+      }
+    }
+
+    function applyScannedInfoToPreview(rowIdx) {
+      const row = tableRowsData[rowIdx];
+      if (!row || !row.scanned_info) return;
+      const info = row.scanned_info;
+      lastLookedUpCeleb = (info.name || row.name || '').toLowerCase();
+
+      document.getElementById('celebMetaName').innerText = info.name || row.name;
+      document.getElementById('celebMetaSpan').innerText =
+        `(${info.birth_year}–${info.death_year} • ${info.recommended_years ? info.recommended_years.length : 10} mốc năm • ${info.reference_images ? info.reference_images.length : 1} ảnh mẫu AI)`;
+      if (info.local_portrait_url || info.portrait_url) {
+        document.getElementById('celebPortraitThumb').src = info.local_portrait_url || info.portrait_url;
+      }
+      const yearsArr = parseYearsFromStr(row.years_str) || info.recommended_years || [];
+      document.getElementById('yearsListInput').value = yearsArr.join(', ');
+
+      // If this row does not have a running/ready project yet, show its placeholder grid cleanly
+      if (!row.project_id) {
+        currentProjectId = null;
+        currentProject = null;
+        wipeStoryboardDOM();
+        renderPlaceholderGridForYears(yearsArr);
+      }
+    }
+
+    function syncScannedTabsFromTable() {
+      // If a batch is actively running or already created, renderBatchSwitcher handles tabs.
+      if (currentBatch && currentBatch.items && currentBatch.items.length) {
+        renderBatchSwitcher(currentBatch);
+        return;
+      }
+      const filled = getFilledTableRows();
+      const bar = document.getElementById('batchSwitcherBar');
+      const summaryEl = document.getElementById('batchSummaryText');
+      const tabsEl = document.getElementById('batchTabsContainer');
+      const btnAll = document.getElementById('btnRenderAllBatch');
+      const btnCur = document.getElementById('btnRenderCurrentTabQuick');
+
+      if (!filled.length) {
+        bar.classList.add('hidden');
+        return;
+      }
+      bar.classList.remove('hidden');
+      if (btnAll) btnAll.classList.add('hidden');
+      if (btnCur) btnCur.classList.add('hidden');
+
+      const scannedCount = filled.filter(f => !!f.row.scanned_info).length;
+      summaryEl.innerText = `Đã duyệt ${scannedCount}/${filled.length} nhân vật — Kiểm tra kết quả quét trên bảng rồi bấm "🚀 2. Tạo Video (Tìm & Cắt)"`;
+
+      tabsEl.innerHTML = filled.map(({ rowIdx, row }, idx) => {
+        const info = row.scanned_info;
+        const labelName = (info && info.name) ? info.name : row.name.trim();
+        const isSelected = (rowIdx === activeTableRowIdx);
+        const spanBadge = info ? `${info.birth_year}–${info.death_year}` : 'Chưa quét';
+        const colorCls = info
+          ? 'bg-amber-50 text-amber-950 border-amber-300 hover:bg-amber-100'
+          : 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200';
+        const ringCls = isSelected ? 'ring-2 ring-indigo-600 font-bold shadow-xs' : 'font-semibold';
+
+        return `
+          <button
+            type="button"
+            onclick="selectScannedRowTab(${rowIdx})"
+            class="px-3 py-1.5 rounded-xl border text-xs flex items-center gap-1.5 transition cursor-pointer ${colorCls} ${ringCls}"
+          >
+            <span>${info ? '👤' : '🕒'}</span>
+            <span>${idx + 1}. ${escapeHtml(labelName)}</span>
+            <span class="px-1.5 py-0.5 rounded bg-white/80 text-[10px] font-mono">${escapeHtml(spanBadge)}</span>
+          </button>
+        `;
+      }).join('');
+    }
+
+    function selectScannedRowTab(rowIdx) {
+      activeTableRowIdx = rowIdx;
+      renderCelebTable();
+      applyScannedInfoToPreview(rowIdx);
+      syncScannedTabsFromTable();
     }
 
     function wipeStoryboardDOM() {
@@ -570,12 +960,21 @@
       currentBatchId = null;
       currentBatch = null;
       lastLookedUpCeleb = "";
+      activeTableRowIdx = 0;
 
-      document.getElementById('celebNameInput').value = '';
-      document.getElementById('celebBatchTextarea').value = '';
+      tableRowsData = Array.from({ length: MAX_TABLE_ROWS }, () => ({
+        name: "",
+        wiki_title: null,
+        years_str: "",
+        scanned_info: null,
+        project_id: null,
+        is_scanning: false
+      }));
+      renderCelebTable();
+
       document.getElementById('yearsListInput').value = '';
       document.getElementById('celebMetaName').innerText = 'Chưa chọn nhân vật';
-      document.getElementById('celebMetaSpan').innerText = '(Nhập tên nhân vật mới để bắt đầu)';
+      document.getElementById('celebMetaSpan').innerText = '(Điền tên vào bảng bên trên và bấm 🔍 1. Quét Nhân Vật)';
       document.getElementById('totalDurationDisplay').innerText = '0.0 giây';
       document.getElementById('btnExportDuration').innerText = '';
       document.getElementById('batchSwitcherBar').classList.add('hidden');
@@ -586,85 +985,19 @@
       const grid = document.getElementById('storyboardGrid');
       grid.innerHTML = `
         <div class="col-span-full bg-white border border-dashed border-slate-300 rounded-2xl p-10 text-center space-y-2">
-          <div class="text-base font-bold text-slate-700">✨ Đã xóa sạch toàn bộ cảnh trên bảng lưới</div>
-          <div class="text-xs text-slate-500">Hãy nhập tên 1 hoặc nhiều người nổi tiếng ở ô trên cùng và bấm <strong>🚀 1. Tạo Video (Tìm & Cắt)</strong> để bắt đầu.</div>
+          <div class="text-base font-bold text-slate-700">✨ Đã xóa sạch danh sách nhân vật & toàn bộ cảnh trên bảng lưới</div>
+          <div class="text-xs text-slate-500">Hãy điền tên nhân vật vào <strong>Bảng Nhập & Duyệt Nhân Vật</strong> ở trên, bấm <strong>🔍 1. Quét Nhân Vật</strong> để duyệt đúng người rồi bấm <strong>🚀 2. Tạo Video</strong>.</div>
         </div>
       `;
 
       const statusBadge = document.getElementById('statusBadge');
       statusBadge.className = 'px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-300 font-semibold';
       statusBadge.innerText = '✔ Đã làm mới';
-      document.getElementById('statusText').innerHTML = 'Bảng lưới đã sẵn sàng cho nhân vật mới.';
+      document.getElementById('statusText').innerHTML = 'Bảng lưới đã sẵn sàng cho danh sách nhân vật mới.';
 
       const btnStart = document.getElementById('btnStartPipeline');
       btnStart.disabled = false;
-      btnStart.innerText = '🚀 1. Tạo Video (Tìm & Cắt)';
-    }
-
-    async function onCelebNameChange() {
-      const names = parseCelebNamesInput();
-      if (!names.length) return;
-      // Immediately clear old celebrity's clips if the typed name changed!
-      if (lastLookedUpCeleb && lastLookedUpCeleb !== names[0].toLowerCase()) {
-        currentProjectId = null;
-        currentProject = null;
-        wipeStoryboardDOM();
-      }
-      await lookupCelebYears(true);
-    }
-
-    async function lookupCelebYears(updateGridPlaceholders = false) {
-      const names = parseCelebNamesInput();
-      if (!names.length) return null;
-      const name = names[0];
-
-      // Immediately replace old celebrity's scenes when looking up a new celebrity
-      if (updateGridPlaceholders && lastLookedUpCeleb && lastLookedUpCeleb !== name.toLowerCase()) {
-        currentProjectId = null;
-        currentProject = null;
-        wipeStoryboardDOM();
-      }
-
-      const btn = document.getElementById('btnLookupCeleb');
-      if (btn) {
-        btn.disabled = true;
-        btn.innerText = '⏳...';
-      }
-      try {
-        const res = await fetch('/api/lookup', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name })
-        });
-        if (!res.ok) return null;
-        const info = await res.json();
-        lastLookedUpCeleb = name.toLowerCase();
-
-        document.getElementById('celebMetaName').innerText = info.name || name;
-        document.getElementById('celebMetaSpan').innerText =
-          `(${info.birth_year}–${info.death_year} • ${info.recommended_years ? info.recommended_years.length : 10} mốc năm • ${info.reference_images ? info.reference_images.length : 1} ảnh mẫu AI)`;
-        if (info.local_portrait_url || info.portrait_url) {
-          document.getElementById('celebPortraitThumb').src = info.local_portrait_url || info.portrait_url;
-        }
-        if (info.recommended_years && info.recommended_years.length) {
-          document.getElementById('yearsListInput').value = info.recommended_years.join(', ');
-          if (updateGridPlaceholders) {
-            currentProjectId = null;
-            currentProject = null;
-            wipeStoryboardDOM();
-            renderPlaceholderGridForYears(info.recommended_years);
-          }
-        }
-        return info;
-      } catch (e) {
-        console.error(e);
-        return null;
-      } finally {
-        if (btn) {
-          btn.disabled = false;
-          btn.innerText = '🔍 Tra năm';
-        }
-      }
+      btnStart.innerText = '🚀 2. Tạo Video (Tìm & Cắt)';
     }
 
     async function initDefaultFolder() {
@@ -778,109 +1111,80 @@
 
     // --- Pipeline, Batch Mode & Storyboard ---
     async function startPipeline() {
-      const names = parseCelebNamesInput();
+      let filled = getFilledTableRows();
       const output_folder = document.getElementById('outputFolderInput').value.trim();
-      if (!names.length) {
-        alert('Vui lòng nhập ít nhất 1 tên người nổi tiếng!');
+      if (!filled.length) {
+        alert('Vui lòng nhập ít nhất 1 tên người nổi tiếng vào bảng!');
         return;
+      }
+
+      // If any filled row hasn't been scanned yet, auto-scan first so typos & disambiguation are applied!
+      const hasUnscanned = filled.some(({ row }) => !row.scanned_info);
+      if (hasUnscanned) {
+        const ok = await scanAllTableRows();
+        if (!ok) return;
+        filled = getFilledTableRows();
       }
 
       const btnStart = document.getElementById('btnStartPipeline');
       btnStart.disabled = true;
       wipeStoryboardDOM();
 
-      // CASE 1: BATCH MODE (2 or more celebrities entered -> Auto Find + Cut + Export MP4 sequentially)
-      if (names.length >= 2) {
-        btnStart.innerText = `⏳ Đang chạy hàng loạt (${names.length} người)...`;
-        try {
-          if (pollTimer) {
-            clearInterval(pollTimer);
-            pollTimer = null;
-          }
-          if (batchPollTimer) {
-            clearInterval(batchPollTimer);
-            batchPollTimer = null;
-          }
-          const res = await fetch('/api/batch/start', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              names,
-              output_folder,
-              news_duration: 11.5,
-              year_clip_duration: 4.2
-            })
-          });
-          const data = await res.json();
-          if (!res.ok) {
-            throw new Error(data.detail || 'Lỗi khởi tạo chạy hàng loạt');
-          }
-          currentBatch = data.batch;
-          currentBatchId = currentBatch.batch_id;
-          batchFollowActive = true;
-          renderBatchSwitcher(currentBatch);
+      const batchItemsPayload = filled.map(({ row }) => ({
+        name: (row.scanned_info && row.scanned_info.name) ? row.scanned_info.name : row.name.trim(),
+        wiki_title: row.wiki_title || (row.scanned_info && row.scanned_info.wiki_title) || null,
+        years: parseYearsFromStr(row.years_str)
+      }));
 
-          if (data.first_project && data.first_project.project_id) {
-            currentProjectId = data.first_project.project_id;
-            lastLookedUpCeleb = names[0].toLowerCase();
-            renderStoryboard(data.first_project);
-          }
-
-          pollTimer = setInterval(pollProjectStatus, 1800);
-          batchPollTimer = setInterval(pollBatchStatus, 2000);
-        } catch (e) {
-          alert('Lỗi chạy hàng loạt: ' + e.message);
-          btnStart.disabled = false;
-          btnStart.innerText = '🚀 1. Tạo Video (Tìm & Cắt)';
-        }
-        return;
-      }
-
-      // CASE 2: SINGLE CELEBRITY MODE
-      const name = names[0];
-      btnStart.innerText = '⏳ Đang tìm & cắt...';
-      document.getElementById('batchSwitcherBar').classList.add('hidden');
-      currentBatchId = null;
-      currentBatch = null;
-
+      btnStart.innerText = `⏳ Đang tìm & cắt (${batchItemsPayload.length} người)...`;
       try {
-        let years = parseYearsInput();
-        if (lastLookedUpCeleb && lastLookedUpCeleb !== name.toLowerCase()) {
-          const info = await lookupCelebYears(false);
-          if (info && info.recommended_years) {
-            years = info.recommended_years;
-          } else {
-            years = null;
-          }
+        if (pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
         }
-
-        const res = await fetch('/api/projects/start', {
+        if (batchPollTimer) {
+          clearInterval(batchPollTimer);
+          batchPollTimer = null;
+        }
+        const res = await fetch('/api/batch/start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            name,
+            items: batchItemsPayload,
             output_folder,
-            years,
             news_duration: 11.5,
-            year_clip_duration: 4.2
+            year_clip_duration: 4.2,
+            auto_render: false
           })
         });
-        const proj = await res.json();
+        const data = await res.json();
         if (!res.ok) {
-          throw new Error(proj.detail || 'Lỗi khởi tạo dự án');
+          throw new Error(data.detail || 'Lỗi khởi tạo tiến trình tạo video');
         }
-        currentProjectId = proj.project_id;
-        lastLookedUpCeleb = name.toLowerCase();
-        if (proj.years && proj.years.length) {
-          document.getElementById('yearsListInput').value = proj.years.join(', ');
+        currentBatch = data.batch;
+        currentBatchId = currentBatch.batch_id;
+        batchFollowActive = true;
+
+        // Link pre-created project_ids back to table rows
+        (currentBatch.items || []).forEach((bItem, bIdx) => {
+          if (filled[bIdx]) {
+            filled[bIdx].row.project_id = bItem.project_id;
+          }
+        });
+
+        renderBatchSwitcher(currentBatch);
+
+        if (data.first_project && data.first_project.project_id) {
+          currentProjectId = data.first_project.project_id;
+          renderStoryboard(data.first_project);
         }
-        renderStoryboard(proj);
-        if (pollTimer) clearInterval(pollTimer);
+
         pollTimer = setInterval(pollProjectStatus, 1800);
+        batchPollTimer = setInterval(pollBatchStatus, 2000);
       } catch (e) {
-        alert('Lỗi: ' + e.message);
+        alert('Lỗi tạo video: ' + e.message);
         btnStart.disabled = false;
-        btnStart.innerText = '🚀 1. Tạo Video (Tìm & Cắt)';
+        btnStart.innerText = '🚀 2. Tạo Video (Tìm & Cắt)';
       }
     }
 
@@ -893,7 +1197,7 @@
         currentBatch = b;
         renderBatchSwitcher(b);
 
-        // If user hasn't manually pinned another tab, auto-follow the currently running celebrity
+        // If user hasn't manually clicked a specific tab, follow the currently running celebrity
         if (batchFollowActive && b.items && b.items[b.current_index]) {
           const activeItem = b.items[b.current_index];
           if (activeItem.project_id && activeItem.project_id !== currentProjectId) {
@@ -911,7 +1215,7 @@
           batchPollTimer = null;
           const btnStart = document.getElementById('btnStartPipeline');
           btnStart.disabled = false;
-          btnStart.innerText = '🚀 1. Tạo Video (Tìm & Cắt)';
+          btnStart.innerText = '🚀 2. Tạo Video (Tìm & Cắt)';
         }
       } catch (e) {
         console.error(e);
@@ -922,6 +1226,9 @@
       const bar = document.getElementById('batchSwitcherBar');
       const summaryEl = document.getElementById('batchSummaryText');
       const tabsEl = document.getElementById('batchTabsContainer');
+      const btnAll = document.getElementById('btnRenderAllBatch');
+      const btnCur = document.getElementById('btnRenderCurrentTabQuick');
+
       if (!batch || !batch.items || !batch.items.length) {
         bar.classList.add('hidden');
         return;
@@ -930,26 +1237,54 @@
 
       const doneCnt = Number(batch.completed_count || 0);
       const totalCnt = Number(batch.total_count || batch.items.length);
+      const readyOrExportedCount = batch.items.filter(it => it.status === 'ready_for_preview' || it.status === 'completed').length;
+      const exportedCount = batch.items.filter(it => !!it.output_path).length;
+
       if (batch.status === 'running') {
-        summaryEl.innerText = `Đang chạy tự động: Hoàn tất ${doneCnt}/${totalCnt} video MP4`;
+        summaryEl.innerText = `⏳ Đang tìm & cắt tự động: Đã xong ${doneCnt}/${totalCnt} nhân vật (Bấm vào bất kỳ Tab nào để xem tiến độ ngay lập tức)`;
+      } else if (exportedCount === totalCnt && totalCnt > 0) {
+        summaryEl.innerText = `🎉 Đã xuất MP4 hoàn tất cho cả ${exportedCount}/${totalCnt} nhân vật!`;
       } else {
-        summaryEl.innerText = `🎉 Đã chạy xong ${doneCnt}/${totalCnt} nhân vật! (Tất cả file MP4 đã lưu trong thư mục Output)`;
+        summaryEl.innerText = `✔ Đã cắt xong ${doneCnt}/${totalCnt} nhân vật! Hãy kiểm nghiệm các cảnh bên dưới rồi bấm "💾 Xuất Video" hoặc "💾 Xuất Tất Cả MP4"`;
+      }
+
+      if (btnAll) {
+        if (readyOrExportedCount >= 1) {
+          btnAll.classList.remove('hidden');
+          btnAll.innerText = totalCnt > 1 ? `💾 Xuất Tất Cả MP4 (${readyOrExportedCount} người)` : `💾 Xuất Video MP4`;
+        } else {
+          btnAll.classList.add('hidden');
+        }
+      }
+
+      const activeItem = batch.items.find(it => it.project_id === currentProjectId);
+      if (btnCur) {
+        if (activeItem && (activeItem.status === 'ready_for_preview' || activeItem.status === 'completed') && totalCnt > 1) {
+          btnCur.classList.remove('hidden');
+          btnCur.innerText = `💾 Xuất Video (${activeItem.display_name || activeItem.name})`;
+        } else {
+          btnCur.classList.add('hidden');
+        }
       }
 
       tabsEl.innerHTML = batch.items.map((item, idx) => {
         const isSelected = item.project_id && item.project_id === currentProjectId;
         const labelName = item.display_name || item.name;
         let statusIcon = '🕒';
-        let metaBadge = 'Chờ chạy';
-        let colorCls = 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200';
+        let metaBadge = `${item.progress_pct || 0}% • Chờ chạy`;
+        let colorCls = 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200';
 
-        if (item.status === 'completed') {
+        if (item.output_path || item.status === 'completed') {
           statusIcon = '✅';
-          metaBadge = item.total_duration ? `${Number(item.total_duration).toFixed(1)}s` : 'Đã xuất MP4';
-          colorCls = 'bg-emerald-50 text-emerald-900 border-emerald-300 hover:bg-emerald-100';
+          metaBadge = item.total_duration ? `Đã xuất MP4 • ${Number(item.total_duration).toFixed(1)}s` : 'Đã xuất MP4';
+          colorCls = 'bg-emerald-100 text-emerald-950 border-emerald-400 hover:bg-emerald-200';
+        } else if (item.status === 'ready_for_preview') {
+          statusIcon = '🎬';
+          metaBadge = item.total_duration ? `Cắt xong (${Number(item.total_duration).toFixed(1)}s) • Chờ xuất` : 'Cắt xong • Chờ xuất';
+          colorCls = 'bg-teal-50 text-teal-900 border-teal-300 hover:bg-teal-100';
         } else if (item.status === 'running') {
           statusIcon = '⏳';
-          metaBadge = `${item.progress_pct || 5}%`;
+          metaBadge = `Đang cắt ${item.progress_pct || 5}%`;
           colorCls = 'bg-blue-50 text-blue-900 border-blue-300 hover:bg-blue-100';
         } else if (item.status === 'error') {
           statusIcon = '⚠️';
@@ -963,11 +1298,11 @@
             type="button"
             onclick="selectBatchItem(${idx})"
             class="px-3 py-1.5 rounded-xl border text-xs flex items-center gap-1.5 transition cursor-pointer ${colorCls} ${ringCls}"
-            title="Bấm để xem bảng lưới Storyboard của ${labelName}"
+            title="Bấm để xem ngay tiến độ & bảng lưới của ${escapeHtml(labelName)} (Không hiện popup)"
           >
             <span>${statusIcon}</span>
-            <span>${idx + 1}. ${labelName}</span>
-            <span class="px-1.5 py-0.5 rounded bg-white/80 text-[10px] font-mono">${metaBadge}</span>
+            <span>${idx + 1}. ${escapeHtml(labelName)}</span>
+            <span class="px-1.5 py-0.5 rounded bg-white/80 text-[10px] font-mono">${escapeHtml(metaBadge)}</span>
           </button>
         `;
       }).join('');
@@ -976,22 +1311,75 @@
     async function selectBatchItem(idx) {
       if (!currentBatch || !currentBatch.items || !currentBatch.items[idx]) return;
       const item = currentBatch.items[idx];
-      if (!item.project_id) {
-        alert(`Nhân vật "${item.name}" đang chờ tới lượt xử lý!`);
+      // Requirement #3: NEVER show an alert() popup when switching tabs!
+      // Every item has a pre-created project_id right from batch start.
+      batchFollowActive = (idx === currentBatch.current_index && currentBatch.status === 'running');
+      activeTableRowIdx = idx;
+      renderCelebTable();
+
+      if (item.project_id) {
+        currentProjectId = item.project_id;
+        wipeStoryboardDOM();
+        renderBatchSwitcher(currentBatch);
+
+        const res = await fetch(`/api/projects/${currentProjectId}`);
+        if (res.ok) {
+          const proj = await res.json();
+          renderStoryboard(proj);
+          if ((proj.status === 'running' || currentBatch.status === 'running') && !pollTimer) {
+            pollTimer = setInterval(pollProjectStatus, 1800);
+          }
+        }
+      } else {
+        selectScannedRowTab(idx);
+      }
+    }
+
+    async function renderAllBatchVideos() {
+      if (!currentBatchId) {
+        await renderFinalVideo();
         return;
       }
-      batchFollowActive = (idx === currentBatch.current_index && currentBatch.status === 'running');
-      currentProjectId = item.project_id;
-      wipeStoryboardDOM();
-      renderBatchSwitcher(currentBatch);
-
-      const res = await fetch(`/api/projects/${currentProjectId}`);
-      if (res.ok) {
-        const proj = await res.json();
-        renderStoryboard(proj);
-        if (proj.status === 'running' && !pollTimer) {
-          pollTimer = setInterval(pollProjectStatus, 1800);
+      const output_folder = document.getElementById('outputFolderInput').value.trim();
+      const btnAll = document.getElementById('btnRenderAllBatch');
+      if (btnAll) {
+        btnAll.disabled = true;
+        btnAll.innerText = '⏳ Đang xuất tất cả MP4...';
+      }
+      try {
+        const res = await fetch(`/api/batch/${currentBatchId}/render-all`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            output_folder,
+            layout: 'center_band'
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.detail || 'Lỗi khi xuất hàng loạt MP4');
         }
+        if (data.batch) {
+          currentBatch = data.batch;
+          renderBatchSwitcher(currentBatch);
+        }
+        await pollProjectStatus();
+        const renderedList = data.rendered || [];
+        if (renderedList.length > 0) {
+          lastExportedPath = renderedList[renderedList.length - 1].output_path;
+          document.getElementById('exportedFilePath').innerText =
+            `Đã xuất ${renderedList.length} video MP4 vào thư mục: ${output_folder}`;
+          document.getElementById('exportedFileMeta').innerText =
+            renderedList.map(r => `${r.name} (${r.total_duration}s)`).join(' • ');
+          document.getElementById('exportedBanner').classList.remove('hidden');
+        }
+      } catch (e) {
+        alert('Lỗi xuất tất cả MP4: ' + e.message);
+      } finally {
+        if (btnAll) {
+          btnAll.disabled = false;
+        }
+        if (currentBatch) renderBatchSwitcher(currentBatch);
       }
     }
 
@@ -1007,7 +1395,7 @@
           pollTimer = null;
           const btnStart = document.getElementById('btnStartPipeline');
           btnStart.disabled = false;
-          btnStart.innerText = '🚀 1. Tạo Video (Tìm & Cắt)';
+          btnStart.innerText = '🚀 2. Tạo Video (Tìm & Cắt)';
         }
       } catch (e) {
         console.error(e);
@@ -1532,7 +1920,7 @@
 
     async function renderFinalVideo() {
       if (!currentProjectId) {
-        alert('Vui lòng bấm "🚀 1. Tạo Video (Tìm & Cắt)" trước khi xuất MP4!');
+        alert('Vui lòng bấm "🚀 2. Tạo Video (Tìm & Cắt)" trước khi xuất MP4!');
         return;
       }
       const output_folder = document.getElementById('outputFolderInput').value.trim();
@@ -1543,7 +1931,9 @@
 
       const btn = document.getElementById('btnRenderFinal');
       const labelEl = document.getElementById('btnRenderLabel');
+      const quickBtn = document.getElementById('btnRenderCurrentTabQuick');
       btn.disabled = true;
+      if (quickBtn) quickBtn.disabled = true;
       if (labelEl) labelEl.innerText = '⏳ Đang xuất MP4...';
 
       try {
@@ -1559,8 +1949,16 @@
         if (!res.ok) {
           throw new Error(proj.detail || 'Lỗi khi xuất file MP4');
         }
-        renderStoryboard(proj);
         const fv = proj.final_video;
+        if (currentBatch && currentBatch.items) {
+          const bItem = currentBatch.items.find(it => it.project_id === currentProjectId);
+          if (bItem && fv) {
+            bItem.status = 'completed';
+            bItem.output_path = fv.output_path;
+            bItem.total_duration = fv.total_duration;
+          }
+        }
+        renderStoryboard(proj);
         if (fv && fv.output_path) {
           lastExportedPath = fv.output_path;
           document.getElementById('exportedFilePath').innerText = fv.output_path;
@@ -1579,7 +1977,8 @@
         alert('Lỗi xuất MP4: ' + e.message);
       } finally {
         btn.disabled = false;
-        if (labelEl) labelEl.innerText = '💾 2. Xuất MP4';
+        if (quickBtn) quickBtn.disabled = false;
+        if (labelEl) labelEl.innerText = '💾 3. Xuất Video';
       }
     }
 
@@ -1621,7 +2020,7 @@
       renderStoryboard(dummyProj);
       document.getElementById('statusBadge').innerText = '✔ Sẵn sàng tạo video';
       document.getElementById('statusText').innerHTML =
-        'Các mốc năm & thời lượng đã được tính tự động theo tiểu sử nhân vật (~1 phút). Bấm <strong>🚀 1. Tạo Video (Tìm & Cắt)</strong> để bắt đầu.';
+        'Các mốc năm & thời lượng đã được tính tự động theo tiểu sử nhân vật (~1 phút). Bấm <strong>🚀 2. Tạo Video (Tìm & Cắt)</strong> để bắt đầu.';
     }
 
     // --- 1-Click Auto-Update System ---
@@ -1655,7 +2054,6 @@
       const btnRecheck = document.getElementById('btnRecheckUpdate');
       const changelogWrap = document.getElementById('updChangelogWrap');
       const changelogList = document.getElementById('updChangelogList');
-      const devSection = document.getElementById('devPublishSection');
       const notifyDot = document.getElementById('updateNotifyDot');
 
       statusBox.className = 'rounded-xl p-3.5 border text-xs space-y-1 bg-slate-50 border-slate-200 text-slate-700';
@@ -1781,15 +2179,24 @@
     }
 
     window.addEventListener('DOMContentLoaded', async () => {
+      renderCelebTable();
       await initDefaultFolder();
       loadVersionBadge();
       try {
         const bRes = await fetch('/api/batch-latest');
         if (bRes.ok) {
           const bData = await bRes.json();
-          if (bData && bData.batch_id) {
+          if (bData && bData.batch_id && bData.items && bData.items.length) {
             currentBatch = bData;
             currentBatchId = bData.batch_id;
+            bData.items.forEach((it, idx) => {
+              if (idx < MAX_TABLE_ROWS) {
+                tableRowsData[idx].name = it.display_name || it.name || '';
+                tableRowsData[idx].wiki_title = it.wiki_title || null;
+                tableRowsData[idx].project_id = it.project_id || null;
+              }
+            });
+            renderCelebTable();
             renderBatchSwitcher(bData);
             if (bData.status === 'running') {
               batchPollTimer = setInterval(pollBatchStatus, 2000);
@@ -1803,29 +2210,18 @@
           const latest = await res.json();
           if (latest && latest.project_id) {
             currentProjectId = latest.project_id;
-            if (latest.celeb_info && latest.celeb_info.name) {
-              document.getElementById('celebNameInput').value = latest.celeb_info.name;
-              lastLookedUpCeleb = latest.celeb_info.name.toLowerCase();
+            if (!getFilledTableRows().length && latest.celeb_info && latest.celeb_info.name) {
+              tableRowsData[0].name = latest.celeb_info.name;
+              tableRowsData[0].wiki_title = latest.celeb_info.wiki_title || latest.celeb_info.name;
+              tableRowsData[0].scanned_info = latest.celeb_info;
+              tableRowsData[0].years_str = (latest.years || []).join(', ');
+              tableRowsData[0].project_id = latest.project_id;
+              renderCelebTable();
             }
             if (latest.output_folder) {
               document.getElementById('outputFolderInput').value = latest.output_folder;
             }
             renderStoryboard(latest);
-            if (latest.final_video && latest.final_video.output_path) {
-              const fv = latest.final_video;
-              lastExportedPath = fv.output_path;
-              document.getElementById('exportedFilePath').innerText = fv.output_path;
-              document.getElementById('exportedFileMeta').innerText = `${fv.total_duration}s • ${fv.file_size_mb} MB`;
-              document.getElementById('exportedBanner').classList.remove('hidden');
-              if (fv.video_url) {
-                document.getElementById('finalVideoPlayer').src = fv.video_url;
-                const dlLink = document.getElementById('btnDirectDownloadMp4');
-                if (dlLink) {
-                  dlLink.href = fv.video_url;
-                  dlLink.download = fv.output_path.split(/[\\/]/).pop();
-                }
-              }
-            }
             if (latest.status === 'running') {
               pollTimer = setInterval(pollProjectStatus, 1800);
             }
@@ -1835,7 +2231,9 @@
       } catch (e) {
         console.error(e);
       }
-      await lookupCelebYears(true);
+      tableRowsData[0].name = "Catherine O'Hara";
+      renderCelebTable();
+      await scanSingleTableRow(0);
     });
   </script>
 </body>

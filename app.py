@@ -112,10 +112,23 @@ def _serialize_project(proj: Dict[str, Any]) -> Dict[str, Any]:
 class LookupRequest(BaseModel):
     name: str
     clip_count: Optional[int] = None
+    exact_wiki_title: Optional[str] = None
+
+
+class LookupBatchItem(BaseModel):
+    row_index: int = 0
+    name: str
+    exact_wiki_title: Optional[str] = None
+
+
+class LookupBatchRequest(BaseModel):
+    items: List[LookupBatchItem]
+    output_folder: Optional[str] = None
 
 
 class StartPipelineRequest(BaseModel):
     name: str
+    exact_wiki_title: Optional[str] = None
     output_folder: Optional[str] = None
     birth_year: Optional[int] = None
     death_year: Optional[int] = None
@@ -127,11 +140,21 @@ class StartPipelineRequest(BaseModel):
     auto_render: bool = False
 
 
+class StartBatchItem(BaseModel):
+    name: str
+    exact_wiki_title: Optional[str] = None
+    years: Optional[List[int]] = None
+    project_id: Optional[str] = None
+
+
 class StartBatchRequest(BaseModel):
-    names: List[str]
+    names: Optional[List[str]] = None
+    items: Optional[List[StartBatchItem]] = None
+    batch_id: Optional[str] = None
     output_folder: Optional[str] = None
     news_duration: float = 11.5
     year_clip_duration: float = 4.2
+    auto_render: bool = False
 
 
 class SwapNewsRequest(BaseModel):
@@ -265,12 +288,108 @@ def api_get_latest_project():
 def api_lookup(req: LookupRequest):
     if not req.name.strip():
         raise HTTPException(status_code=400, detail="Vui lòng nhập tên người nổi tiếng.")
-    temp_id = "lookup_" + re.sub(r"[^a-zA-Z0-9_-]", "_", req.name.strip().lower())[:30]
+    key_str = (req.exact_wiki_title or req.name).strip().lower()
+    temp_id = "lookup_" + re.sub(r"[^a-zA-Z0-9_-]", "_", key_str)[:30]
     save_dir = os.path.join(WORKSPACE_DIR, "_cache_portraits", temp_id)
-    info = lookup_celebrity(req.name, save_dir=save_dir, target_clip_count=req.clip_count)
+    info = lookup_celebrity(
+        req.name,
+        save_dir=save_dir,
+        target_clip_count=req.clip_count,
+        exact_wiki_title=req.exact_wiki_title,
+    )
     if info.get("reference_images"):
         info["local_portrait_url"] = _to_web_url(info["reference_images"][0])
     return info
+
+
+@app.post("/api/lookup-batch")
+def api_lookup_batch(req: LookupBatchRequest):
+    """
+    Scan a list of celebrity rows entered in the UI Table, disambiguate each celebrity via Wikipedia,
+    and pre-create a preview project + batch tabs so the user can review/approve each celebrity
+    and switch tabs freely before clicking "Tạo Video".
+    """
+    valid_items = [it for it in (req.items or []) if it.name and it.name.strip()]
+    if not valid_items:
+        raise HTTPException(status_code=400, detail="Vui lòng nhập ít nhất 1 tên nhân vật vào bảng.")
+
+    output_folder = (req.output_folder or DEFAULT_OUTPUT_DIR).strip() or DEFAULT_OUTPUT_DIR
+    batch_id = f"batch_{int(time.time())}_{uuid.uuid4().hex[:4]}"
+    max_keep = max(12, len(valid_items) + 5)
+
+    scanned_results = []
+    batch_items = []
+    first_proj_serialized = None
+
+    for idx, it in enumerate(valid_items):
+        p_req = StartPipelineRequest(
+            name=it.name.strip(),
+            exact_wiki_title=it.exact_wiki_title,
+            output_folder=output_folder,
+            auto_render=False,
+        )
+        pid = _create_project_record(p_req, max_keep=max_keep, initial_status="scanned")
+        with PROJECTS_LOCK:
+            p = PROJECTS[pid]
+            ci = p["celeb_info"]
+            if idx == 0:
+                first_proj_serialized = _serialize_project(p)
+
+        local_portrait = _to_web_url(ci["reference_images"][0]) if ci.get("reference_images") else (ci.get("portrait_url") or "")
+        scanned_row = {
+            "row_index": it.row_index,
+            "input_name": it.name.strip(),
+            "project_id": pid,
+            "name": ci.get("name") or it.name.strip(),
+            "wiki_title": ci.get("wiki_title") or ci.get("name") or it.name.strip(),
+            "description": ci.get("description") or "",
+            "birth_year": ci.get("birth_year"),
+            "death_year": ci.get("death_year"),
+            "portrait_url": local_portrait,
+            "recommended_years": ci.get("recommended_years") or [],
+            "candidates": ci.get("candidates") or [],
+        }
+        scanned_results.append(scanned_row)
+
+        batch_items.append(
+            {
+                "index": idx,
+                "row_index": it.row_index,
+                "name": scanned_row["name"],
+                "display_name": scanned_row["name"],
+                "wiki_title": scanned_row["wiki_title"],
+                "project_id": pid,
+                "status": "scanned",
+                "progress_pct": 0,
+                "progress_message": "Đã quét thông tin — Sẵn sàng tạo video",
+                "total_duration": 0.0,
+                "output_path": "",
+                "error": None,
+            }
+        )
+
+    batch_state = {
+        "batch_id": batch_id,
+        "created_at": time.time(),
+        "status": "scanned",
+        "output_folder": output_folder,
+        "news_duration": 11.5,
+        "year_clip_duration": 4.2,
+        "total_count": len(batch_items),
+        "completed_count": 0,
+        "ready_to_export_count": 0,
+        "current_index": 0,
+        "items": batch_items,
+    }
+
+    with PROJECTS_LOCK:
+        BATCHES[batch_id] = batch_state
+
+    return {
+        "batch": batch_state,
+        "scanned_rows": scanned_results,
+        "first_project": first_proj_serialized,
+    }
 
 
 def _cleanup_old_projects(max_keep: int = 5, exclude_project_id: Optional[str] = None) -> Dict[str, Any]:
@@ -325,7 +444,7 @@ def api_cleanup_workspace():
     return _cleanup_old_projects(max_keep=5)
 
 
-def _create_project_record(req: StartPipelineRequest, max_keep: int = 8) -> str:
+def _create_project_record(req: StartPipelineRequest, max_keep: int = 8, initial_status: str = "running") -> str:
     project_id = f"proj_{int(time.time() * 1000)}_{uuid.uuid4().hex[:4]}"
     _cleanup_old_projects(max_keep=max_keep, exclude_project_id=project_id)
     pdir = _project_dir(project_id)
@@ -334,6 +453,7 @@ def _create_project_record(req: StartPipelineRequest, max_keep: int = 8) -> str:
         req.name,
         save_dir=os.path.join(pdir, "refs"),
         target_clip_count=len(req.years) if req.years else req.clip_count,
+        exact_wiki_title=req.exact_wiki_title,
     )
     if req.birth_year:
         celeb_info["birth_year"] = req.birth_year
@@ -354,12 +474,17 @@ def _create_project_record(req: StartPipelineRequest, max_keep: int = 8) -> str:
     else:
         base_dur, min_dur, max_dur = 4.4, 3.8, 5.2
 
+    is_scanned_only = (initial_status == "scanned")
     proj_state = {
         "project_id": project_id,
         "created_at": time.time(),
-        "status": "running",
-        "progress_pct": 5,
-        "progress_message": f"Đang khởi tạo {len(celeb_info.get('reference_images', []))} ảnh khuôn mặt mẫu AI cho {celeb_info['name']} ({celeb_info['birth_year']}–{celeb_info['death_year']})...",
+        "status": initial_status,
+        "progress_pct": 0 if is_scanned_only else 5,
+        "progress_message": (
+            f"Đã quét nhân vật {celeb_info['name']} ({celeb_info['birth_year']}–{celeb_info['death_year']}) — Chờ bấm Tạo Video..."
+            if is_scanned_only
+            else f"Đang khởi tạo {len(celeb_info.get('reference_images', []))} ảnh khuôn mặt mẫu AI cho {celeb_info['name']} ({celeb_info['birth_year']}–{celeb_info['death_year']})..."
+        ),
         "celeb_info": celeb_info,
         "output_folder": output_folder,
         "years": years,
@@ -370,8 +495,8 @@ def _create_project_record(req: StartPipelineRequest, max_keep: int = 8) -> str:
         "custom_news_url": req.custom_news_url,
         "auto_render": req.auto_render,
         "news_clip": {
-            "status": "processing",
-            "title": "Đang tìm & cắt bản tin mở đầu...",
+            "status": "pending" if is_scanned_only else "processing",
+            "title": "Chờ tạo bản tin mở đầu..." if is_scanned_only else "Đang tìm & cắt bản tin mở đầu...",
             "duration_sec": req.news_duration,
         },
         "year_clips": [
@@ -416,30 +541,79 @@ def api_start_project(req: StartPipelineRequest):
 
 @app.post("/api/batch/start")
 def api_start_batch(req: StartBatchRequest):
-    raw_names = [n.strip() for n in (req.names or []) if n and n.strip()]
-    seen_lower = set()
-    clean_names = []
-    for nm in raw_names:
-        if nm.lower() not in seen_lower:
-            seen_lower.add(nm.lower())
-            clean_names.append(nm)
+    output_folder = (req.output_folder or DEFAULT_OUTPUT_DIR).strip() or DEFAULT_OUTPUT_DIR
 
-    if not clean_names:
+    entry_list: List[StartBatchItem] = []
+    if req.items:
+        for it in req.items:
+            if it.name and it.name.strip():
+                entry_list.append(it)
+    elif req.names:
+        seen_lower = set()
+        for nm in req.names:
+            if nm and nm.strip() and nm.strip().lower() not in seen_lower:
+                seen_lower.add(nm.strip().lower())
+                entry_list.append(StartBatchItem(name=nm.strip()))
+
+    if not entry_list:
         raise HTTPException(status_code=400, detail="Vui lòng nhập ít nhất 1 tên nhân vật.")
 
-    output_folder = (req.output_folder or DEFAULT_OUTPUT_DIR).strip() or DEFAULT_OUTPUT_DIR
-    batch_id = f"batch_{int(time.time())}_{uuid.uuid4().hex[:4]}"
-    max_keep = max(10, len(clean_names) + 4)
+    batch_id = req.batch_id or f"batch_{int(time.time())}_{uuid.uuid4().hex[:4]}"
+    max_keep = max(12, len(entry_list) + 5)
 
-    # Pre-create the 1st celebrity project immediately so the UI can display its Storyboard right away
-    first_req = StartPipelineRequest(
-        name=clean_names[0],
-        output_folder=output_folder,
-        news_duration=req.news_duration,
-        year_clip_duration=req.year_clip_duration,
-        auto_render=True,
-    )
-    first_pid = _create_project_record(first_req, max_keep=max_keep)
+    batch_items = []
+    first_proj = None
+
+    # Pre-create (or reuse scanned) project records for ALL items upfront so every tab is immediately clickable without any popup!
+    for idx, entry in enumerate(entry_list):
+        pid = entry.project_id
+        if pid and pid in PROJECTS:
+            with PROJECTS_LOCK:
+                p = PROJECTS[pid]
+                p["output_folder"] = output_folder
+                p["status"] = "running" if idx == 0 else "queued"
+                p["progress_pct"] = 5 if idx == 0 else 0
+                p["progress_message"] = "Đang bắt đầu tìm & cắt video..." if idx == 0 else "Đang chờ tới lượt xử lý..."
+                if entry.years:
+                    p["years"] = sorted(entry.years)
+            _save_project_state(pid)
+        else:
+            p_req = StartPipelineRequest(
+                name=entry.name.strip(),
+                exact_wiki_title=entry.exact_wiki_title,
+                years=entry.years,
+                output_folder=output_folder,
+                news_duration=req.news_duration,
+                year_clip_duration=req.year_clip_duration,
+                auto_render=False,
+            )
+            pid = _create_project_record(
+                p_req,
+                max_keep=max_keep,
+                initial_status="running" if idx == 0 else "queued",
+            )
+
+        with PROJECTS_LOCK:
+            p_obj = PROJECTS[pid]
+            disp_name = p_obj.get("celeb_info", {}).get("name") or entry.name.strip()
+            if idx == 0:
+                first_proj = _serialize_project(p_obj)
+
+        batch_items.append(
+            {
+                "index": idx,
+                "name": entry.name.strip(),
+                "display_name": disp_name,
+                "wiki_title": entry.exact_wiki_title or disp_name,
+                "project_id": pid,
+                "status": "running" if idx == 0 else "queued",
+                "progress_pct": 5 if idx == 0 else 0,
+                "progress_message": "Đang bắt đầu tìm & cắt video..." if idx == 0 else "Đang chờ tới lượt xử lý...",
+                "total_duration": 0.0,
+                "output_path": "",
+                "error": None,
+            }
+        )
 
     batch_state = {
         "batch_id": batch_id,
@@ -448,28 +622,15 @@ def api_start_batch(req: StartBatchRequest):
         "output_folder": output_folder,
         "news_duration": req.news_duration,
         "year_clip_duration": req.year_clip_duration,
-        "total_count": len(clean_names),
+        "total_count": len(batch_items),
         "completed_count": 0,
+        "ready_to_export_count": 0,
         "current_index": 0,
-        "items": [
-            {
-                "index": idx,
-                "name": nm,
-                "project_id": first_pid if idx == 0 else None,
-                "status": "running" if idx == 0 else "queued",
-                "progress_pct": 5 if idx == 0 else 0,
-                "progress_message": "Đang khởi tạo..." if idx == 0 else "Đang chờ tới lượt...",
-                "total_duration": 0.0,
-                "output_path": "",
-                "error": None,
-            }
-            for idx, nm in enumerate(clean_names)
-        ],
+        "items": batch_items,
     }
 
     with PROJECTS_LOCK:
         BATCHES[batch_id] = batch_state
-        first_proj = _serialize_project(PROJECTS[first_pid])
 
     t = threading.Thread(target=_run_batch_worker, args=(batch_id, max_keep), daemon=True)
     t.start()
@@ -493,12 +654,27 @@ def _sync_batch_items(batch_id: str) -> Optional[Dict[str, Any]]:
                 item["progress_message"] = p.get("progress_message", item.get("progress_message", ""))
                 if p.get("celeb_info") and p["celeb_info"].get("name"):
                     item["display_name"] = p["celeb_info"]["name"]
+
+                # Compute total cut duration for preview
+                nc_dur = float(p.get("news_clip", {}).get("duration_sec") or 0.0) if p.get("news_clip", {}).get("status") != "cleared" else 0.0
+                yc_dur = sum(float(yc.get("duration_sec") or 0.0) for yc in p.get("year_clips", []) if yc.get("status") == "ready")
+                cut_dur = round(nc_dur + yc_dur, 1)
+
                 if p.get("final_video") and p["final_video"].get("output_path"):
-                    item["total_duration"] = p["final_video"].get("total_duration", 0.0)
+                    item["total_duration"] = p["final_video"].get("total_duration", cut_dur)
                     item["output_path"] = p["final_video"].get("output_path", "")
                     if item["status"] != "running":
-                        item["status"] = "completed"
-        b["completed_count"] = sum(1 for x in b.get("items", []) if x.get("status") == "completed")
+                        item["status"] = "exported"
+                elif p.get("status") == "ready_for_preview":
+                    item["total_duration"] = cut_dur
+                    if item["status"] not in ("exported",):
+                        item["status"] = "ready_for_preview"
+        b["completed_count"] = sum(
+            1 for x in b.get("items", []) if x.get("status") in ("ready_for_preview", "exported", "completed")
+        )
+        b["exported_count"] = sum(
+            1 for x in b.get("items", []) if x.get("status") == "exported" or x.get("output_path")
+        )
         return json.loads(json.dumps(b, default=str))
 
 
@@ -508,9 +684,6 @@ def _run_batch_worker(batch_id: str, max_keep: int = 12):
         if not b:
             return
         items_len = len(b["items"])
-        output_folder = b["output_folder"]
-        news_dur = b["news_duration"]
-        year_dur = b["year_clip_duration"]
 
     for idx in range(items_len):
         with PROJECTS_LOCK:
@@ -519,41 +692,26 @@ def _run_batch_worker(batch_id: str, max_keep: int = 12):
                 return
             b["current_index"] = idx
             item = b["items"][idx]
-            nm = item["name"]
             pid = item.get("project_id")
             item["status"] = "running"
+            if pid and pid in PROJECTS:
+                PROJECTS[pid]["status"] = "running"
 
         if not pid:
-            try:
-                p_req = StartPipelineRequest(
-                    name=nm,
-                    output_folder=output_folder,
-                    news_duration=news_dur,
-                    year_clip_duration=year_dur,
-                    auto_render=True,
-                )
-                pid = _create_project_record(p_req, max_keep=max_keep)
-                with PROJECTS_LOCK:
-                    BATCHES[batch_id]["items"][idx]["project_id"] = pid
-            except Exception as e:
-                with PROJECTS_LOCK:
-                    BATCHES[batch_id]["items"][idx]["status"] = "error"
-                    BATCHES[batch_id]["items"][idx]["error"] = str(e)
-                continue
+            continue
 
         try:
-            _run_full_pipeline_worker(pid, auto_render=True)
+            # Rule 4: Do NOT auto-render MP4 during batch run; stop at ready_for_preview so user can inspect & click Export / Export All!
+            _run_full_pipeline_worker(pid, auto_render=False)
             with PROJECTS_LOCK:
                 p = PROJECTS.get(pid, {})
-                fv = p.get("final_video")
-                if fv and fv.get("output_path"):
-                    BATCHES[batch_id]["items"][idx]["status"] = "completed"
+                ready_yc = [yc for yc in p.get("year_clips", []) if yc.get("status") == "ready"]
+                if ready_yc:
+                    BATCHES[batch_id]["items"][idx]["status"] = "ready_for_preview"
                     BATCHES[batch_id]["items"][idx]["progress_pct"] = 100
-                    BATCHES[batch_id]["items"][idx]["total_duration"] = fv.get("total_duration", 0.0)
-                    BATCHES[batch_id]["items"][idx]["output_path"] = fv.get("output_path", "")
                 else:
                     BATCHES[batch_id]["items"][idx]["status"] = "error"
-                    BATCHES[batch_id]["items"][idx]["error"] = p.get("error") or "Chưa xuất được file MP4"
+                    BATCHES[batch_id]["items"][idx]["error"] = p.get("error") or "Không tìm đủ tư liệu video"
         except Exception as e:
             with PROJECTS_LOCK:
                 BATCHES[batch_id]["items"][idx]["status"] = "error"
@@ -561,10 +719,62 @@ def _run_batch_worker(batch_id: str, max_keep: int = 12):
 
     with PROJECTS_LOCK:
         if batch_id in BATCHES:
-            BATCHES[batch_id]["status"] = "completed"
-            BATCHES[batch_id]["completed_count"] = sum(
-                1 for x in BATCHES[batch_id]["items"] if x.get("status") == "completed"
+            BATCHES[batch_id]["status"] = "ready_for_preview"
+
+
+@app.post("/api/batch/{batch_id}/render-all")
+def api_render_batch_all(batch_id: str, req: RenderRequest):
+    """
+    Export MP4 for ALL ready celebrities in the batch at once ("💾 Xuất Tất Cả MP4").
+    """
+    with PROJECTS_LOCK:
+        b = BATCHES.get(batch_id)
+        if not b:
+            raise HTTPException(status_code=404, detail="Không tìm thấy lô chạy hàng loạt.")
+        items = list(b.get("items", []))
+        default_out = b.get("output_folder") or DEFAULT_OUTPUT_DIR
+
+    target_folder = (req.output_folder or default_out).strip() or DEFAULT_OUTPUT_DIR
+    exported_files = []
+    errors = []
+
+    for item in items:
+        pid = item.get("project_id")
+        if not pid:
+            continue
+        try:
+            proj_ser = _render_project_internal(
+                project_id=pid,
+                output_folder=target_folder,
+                layout=req.layout,
+                allow_missing_news=True,
             )
+            fv = proj_ser.get("final_video") or {}
+            if fv.get("output_path"):
+                exported_files.append(
+                    {
+                        "project_id": pid,
+                        "name": item.get("display_name") or item.get("name"),
+                        "output_path": fv["output_path"],
+                        "total_duration": fv.get("total_duration", 0.0),
+                        "file_size_mb": fv.get("file_size_mb", 0.0),
+                    }
+                )
+        except Exception as e:
+            errors.append(f"{item.get('name')}: {e}")
+
+    with PROJECTS_LOCK:
+        if batch_id in BATCHES:
+            BATCHES[batch_id]["status"] = "completed"
+
+    return {
+        "ok": True,
+        "batch": _sync_batch_items(batch_id),
+        "exported_count": len(exported_files),
+        "exported_files": exported_files,
+        "errors": errors,
+        "output_folder": target_folder,
+    }
 
 
 @app.get("/api/batch/{batch_id}")
@@ -601,6 +811,7 @@ def _run_full_pipeline_worker(project_id: str, auto_render: bool = False):
         proj = PROJECTS[project_id]
         celeb_name = proj["celeb_info"]["name"]
         ref_imgs = proj["celeb_info"].get("reference_images", [])
+        extra_forbidden = proj["celeb_info"].get("youtube_forbidden_terms", [])
         years = list(proj["years"])
         news_dur = float(proj["news_duration"])
         year_dur = float(proj["year_clip_duration"])
@@ -678,6 +889,7 @@ def _run_full_pipeline_worker(project_id: str, auto_render: bool = False):
                 year_window=win,
                 used_video_ids=used_video_ids,
                 forbidden_years=used_years if sc_idx == 1 else None,
+                extra_forbidden_terms=extra_forbidden,
                 scene_index=sc_idx,
             )
             y_clip["status"] = "ready"

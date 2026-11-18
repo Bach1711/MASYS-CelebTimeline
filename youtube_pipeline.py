@@ -523,6 +523,7 @@ def _score_and_validate_year_candidate(
     year_window: Tuple[int, int],
     current_year: int,
     forbidden_years: Optional[Set[int]] = None,
+    extra_forbidden_terms: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Validate and score a YouTube candidate for a specific career milestone year.
@@ -545,7 +546,7 @@ def _score_and_validate_year_candidate(
     if re.search(r"\b(19\d{2}|20\d{2})\s*[-–—~to]+\s*(19\d{2}|20\d{2})\b", title_l):
         return None
 
-    # 3. Strictly reject death reports, other-celebrity tributes, and multi-actor movie trailers
+    # 3. Strictly reject death reports, static-photo/audio recordings, subtitle/lyric videos, commercials, and tabloid news
     always_forbidden = [
         "evolution",
         "transformation",
@@ -574,8 +575,34 @@ def _score_and_validate_year_candidate(
         "official trailer",
         "trailer #",
         "teaser trailer",
+        "audio",
+        "phone interview",
+        "telephone",
+        "voicemail",
+        "subtitled",
+        "subtitulado",
+        "legendado",
+        "with subtitles",
+        "sub.",
+        "lyrics",
+        "lyric video",
+        "slideshow",
+        "rare photos",
+        "photo",
+        "pictures",
+        "caught on fire",
+        "pepsi commercial",
+        "commercial",
+        "hard copy",
+        "good morning britain",
+        "inside edition",
+        "spills",
+        "secrets",
     ]
     if any(k in title_l for k in always_forbidden):
+        return None
+
+    if extra_forbidden_terms and any(k.lower() in combined_l for k in extra_forbidden_terms):
         return None
 
     if target_year < current_year - 1:
@@ -623,8 +650,8 @@ def _score_and_validate_year_candidate(
 
     if name_clean in title_l or name_clean.replace("'", "") in title_l.replace("'", ""):
         score += 6
-    if any(k in title_l for k in ["interview", "talk", "speech", "acceptance", "monologue", "commercial", "late night", "tonight show", "letterman", "sctv", "scene", "clip"]):
-        score += 4
+    if any(k in title_l for k in ["interview", "talk", "speech", "acceptance", "monologue", "late night", "tonight show", "letterman", "oprah", "arsenio", "live", "awards", "grammy", "oscar", "emmy", "sctv", "scene", "clip"]):
+        score += 5
 
     dur = float(item.get("duration") or 120.0)
     if 20 <= dur <= 480:
@@ -654,12 +681,13 @@ def find_and_prepare_year_clip(
     year_window: Optional[Tuple[int, int]] = None,
     used_video_ids: Optional[Set[str]] = None,
     forbidden_years: Optional[Set[int]] = None,
+    extra_forbidden_terms: Optional[List[str]] = None,
     scene_index: int = 1,
 ) -> Dict[str, Any]:
     """
     Search YouTube for `<Celeb Name> <Year>`, strictly validate that candidate videos
     actually belong to that year/era, download active sections, and verify via FaceEngine
-    that the main celebrity is clearly on screen with adaptive shot duration (3.5s - 5.4s).
+    that the main celebrity is clearly on screen with live motion and no text overlays.
     """
     current_year = datetime.datetime.now().year
     win = year_window or (year - 2, min(current_year, year + 2))
@@ -687,8 +715,9 @@ def find_and_prepare_year_clip(
         )
     else:
         primary_queries = [
-            f"{celeb_name} {year}",
             f"{celeb_name} {year} interview",
+            f"{celeb_name} {year} live",
+            f"{celeb_name} {year}",
         ]
         if year >= current_year:
             primary_queries.append(f"{celeb_name} {year - 1} interview")
@@ -710,6 +739,7 @@ def find_and_prepare_year_clip(
                         year_window=win,
                         current_year=current_year,
                         forbidden_years=forbid_yrs,
+                        extra_forbidden_terms=extra_forbidden_terms,
                     )
                     if scored is not None:
                         candidates.append(scored)
@@ -722,8 +752,8 @@ def find_and_prepare_year_clip(
             for delta in [-1, 1, -2, 2]:
                 adj_y = year + delta
                 if win[0] <= adj_y <= win[1] and adj_y not in forbid_yrs:
-                    adj_queries.append(f"{celeb_name} {adj_y}")
                     adj_queries.append(f"{celeb_name} {adj_y} interview")
+                    adj_queries.append(f"{celeb_name} {adj_y}")
             _collect_from_queries(adj_queries[:4])
 
         explicit_cands = [c for c in candidates if c.get("has_explicit_year")]
@@ -741,7 +771,7 @@ def find_and_prepare_year_clip(
     best_fallback: Optional[Dict[str, Any]] = None
     best_fallback_score = -1.0
 
-    for cand in ordered[:4]:
+    for cand in ordered[:5]:
         vid = cand["video_id"]
         vid_dur = float(cand.get("duration") or 90.0)
 
@@ -781,6 +811,10 @@ def find_and_prepare_year_clip(
             sim = float(chosen_seg.get("similarity", 0.0))
             m_ratio = float(chosen_seg.get("match_ratio", 0.0))
             f_ratio = float(chosen_seg.get("face_ratio", 0.0))
+            is_live = bool(chosen_seg.get("is_live_motion", True))
+            is_no_text = bool(chosen_seg.get("is_clean_no_text", True))
+            has_cont_celeb = bool(chosen_seg.get("has_continuous_celeb", m_ratio >= 0.78))
+            thumb_offset = float(chosen_seg.get("best_thumb_offset_sec") or (seg_dur * 0.4))
 
             out_clip = os.path.join(year_dir, f"clip_{year}_{vid}_w{w_idx}_s{seg_idx}_sc{scene_index}.mp4")
             thumb_path = os.path.join(year_dir, f"thumb_{year}_{vid}_w{w_idx}_s{seg_idx}_sc{scene_index}.jpg")
@@ -788,7 +822,7 @@ def find_and_prepare_year_clip(
             if not cut_video_clip(raw_path, out_clip, start_sec=rel_start, duration_sec=seg_dur, keep_audio=False):
                 continue
 
-            extract_thumbnail(out_clip, thumb_path, time_sec=seg_dur * 0.4)
+            extract_thumbnail(out_clip, thumb_path, time_sec=thumb_offset)
             actual_dur = get_video_duration(out_clip) or seg_dur
             display_year = int(cand.get("matched_year") or year)
 
@@ -809,6 +843,8 @@ def find_and_prepare_year_clip(
                 "face_similarity": sim,
                 "face_ratio": f_ratio,
                 "match_ratio": m_ratio,
+                "face_motion": chosen_seg.get("face_motion", 15.0),
+                "text_score": chosen_seg.get("text_score", 0.0),
                 "clip_path": out_clip,
                 "raw_path": raw_path,
                 "thumb_path": thumb_path,
@@ -818,11 +854,24 @@ def find_and_prepare_year_clip(
                 "candidates": candidates[:8],
             }
 
-            is_verified_celeb = (sim >= 0.25 and m_ratio >= 0.50 and f_ratio >= 0.70)
+            is_verified_celeb = (
+                sim >= 0.27
+                and m_ratio >= 0.78
+                and f_ratio >= 0.80
+                and has_cont_celeb
+                and is_live
+                and is_no_text
+            )
             if is_verified_celeb:
                 return result_dict
 
-            fb_quality = sim * 2.0 + m_ratio + f_ratio * 0.5
+            fb_quality = (
+                sim * 2.5
+                + m_ratio * 2.0
+                + (1.5 if is_live else -2.0)
+                + (1.0 if is_no_text else -1.5)
+                + (1.0 if has_cont_celeb else -1.0)
+            )
             if fb_quality > best_fallback_score:
                 best_fallback_score = fb_quality
                 best_fallback = result_dict
@@ -1045,11 +1094,14 @@ def create_second_scene_for_year(
                 sim = float(chosen_seg.get("similarity", 0.0))
                 m_ratio = float(chosen_seg.get("match_ratio", 0.0))
                 f_ratio = float(chosen_seg.get("face_ratio", 0.0))
-                if sim < 0.25 or m_ratio < 0.50 or f_ratio < 0.70:
+                is_live = bool(chosen_seg.get("is_live_motion", True))
+                is_no_text = bool(chosen_seg.get("is_clean_no_text", True))
+                if sim < 0.27 or m_ratio < 0.75 or f_ratio < 0.78 or not is_live or not is_no_text:
                     continue
 
                 rel_start = float(chosen_seg["start_sec"])
                 seg_dur = float(chosen_seg.get("duration_sec") or 4.4)
+                thumb_offset = float(chosen_seg.get("best_thumb_offset_sec") or (seg_dur * 0.4))
                 ts = int(time.time() * 100) % 100000
                 out_clip = os.path.join(year_dir, f"clip_{yr}_{vid}_w{w_idx}_s{seg_idx}_sc2_{ts}.mp4")
                 thumb_path = os.path.join(year_dir, f"thumb_{yr}_{vid}_w{w_idx}_s{seg_idx}_sc2_{ts}.jpg")
@@ -1057,7 +1109,7 @@ def create_second_scene_for_year(
                 if not cut_video_clip(raw_path, out_clip, start_sec=rel_start, duration_sec=seg_dur, keep_audio=False):
                     continue
 
-                extract_thumbnail(out_clip, thumb_path, time_sec=seg_dur * 0.4)
+                extract_thumbnail(out_clip, thumb_path, time_sec=thumb_offset)
                 if existing_thumb and os.path.exists(existing_thumb):
                     if not _are_clips_visually_distinct(existing_thumb, thumb_path):
                         try:
@@ -1107,7 +1159,12 @@ def create_second_scene_for_year(
             # Must be at least 12.0 seconds away so it never overlaps or repeats the same moment
             if abs(float(seg["start_sec"]) - float(existing_yc.get("rel_start_sec", 0))) < 12.0:
                 continue
-            if float(seg.get("similarity", 0)) < 0.25:
+            if (
+                float(seg.get("similarity", 0)) < 0.27
+                or float(seg.get("match_ratio", 0)) < 0.75
+                or not bool(seg.get("is_live_motion", True))
+                or not bool(seg.get("is_clean_no_text", True))
+            ):
                 continue
 
             rel_start = float(seg["start_sec"])
