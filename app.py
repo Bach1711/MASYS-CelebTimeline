@@ -52,6 +52,7 @@ app = FastAPI(title="MASYS CelebTimeline")
 face_engine = FaceEngine()
 
 PROJECTS: Dict[str, Dict[str, Any]] = {}
+BATCHES: Dict[str, Dict[str, Any]] = {}
 PROJECTS_LOCK = threading.Lock()
 
 
@@ -123,9 +124,18 @@ class StartPipelineRequest(BaseModel):
     news_duration: float = 11.5
     year_clip_duration: float = 4.2
     custom_news_url: Optional[str] = None
+    auto_render: bool = False
+
+
+class StartBatchRequest(BaseModel):
+    names: List[str]
+    output_folder: Optional[str] = None
+    news_duration: float = 11.5
+    year_clip_duration: float = 4.2
 
 
 class SwapNewsRequest(BaseModel):
+    action: Optional[str] = None  # "clear" | None
     candidate_index: Optional[int] = None
     custom_url: Optional[str] = None
     start_sec: Optional[float] = None
@@ -315,13 +325,9 @@ def api_cleanup_workspace():
     return _cleanup_old_projects(max_keep=5)
 
 
-@app.post("/api/projects/start")
-def api_start_project(req: StartPipelineRequest):
-    if not req.name.strip():
-        raise HTTPException(status_code=400, detail="Vui lòng nhập tên người nổi tiếng.")
-
-    project_id = f"proj_{int(time.time())}_{uuid.uuid4().hex[:4]}"
-    _cleanup_old_projects(max_keep=5, exclude_project_id=project_id)
+def _create_project_record(req: StartPipelineRequest, max_keep: int = 8) -> str:
+    project_id = f"proj_{int(time.time() * 1000)}_{uuid.uuid4().hex[:4]}"
+    _cleanup_old_projects(max_keep=max_keep, exclude_project_id=project_id)
     pdir = _project_dir(project_id)
 
     celeb_info = lookup_celebrity(
@@ -334,7 +340,6 @@ def api_start_project(req: StartPipelineRequest):
     if req.death_year:
         celeb_info["death_year"] = req.death_year
 
-    # Allow user-specified years (including duplicate years if user explicitly typed e.g. 1990, 1990 for 2 scenes)
     if req.years:
         years = sorted(req.years)
     else:
@@ -342,8 +347,6 @@ def api_start_project(req: StartPipelineRequest):
 
     output_folder = (req.output_folder or DEFAULT_OUTPUT_DIR).strip() or DEFAULT_OUTPUT_DIR
 
-    # Adaptive target duration per clip based on how many distinct years we start with:
-    # Fewer years -> longer clip duration (4.6s-5.6s); 10-12 distinct years -> 4.4s-5.2s so total is ~56-62s without repeating years!
     if len(years) <= 7:
         base_dur, min_dur, max_dur = 4.9, 4.2, 5.6
     elif len(years) <= 10:
@@ -365,6 +368,7 @@ def api_start_project(req: StartPipelineRequest):
         "min_clip_duration": min_dur,
         "max_clip_duration": max_dur,
         "custom_news_url": req.custom_news_url,
+        "auto_render": req.auto_render,
         "news_clip": {
             "status": "processing",
             "title": "Đang tìm & cắt bản tin mở đầu...",
@@ -389,11 +393,195 @@ def api_start_project(req: StartPipelineRequest):
     with PROJECTS_LOCK:
         PROJECTS[project_id] = proj_state
     _save_project_state(project_id)
+    return project_id
 
-    t = threading.Thread(target=_run_full_pipeline_worker, args=(project_id,), daemon=True)
+
+@app.post("/api/projects/start")
+def api_start_project(req: StartPipelineRequest):
+    if not req.name.strip():
+        raise HTTPException(status_code=400, detail="Vui lòng nhập tên người nổi tiếng.")
+
+    project_id = _create_project_record(req, max_keep=8)
+    t = threading.Thread(
+        target=_run_full_pipeline_worker,
+        args=(project_id, bool(req.auto_render)),
+        daemon=True,
+    )
     t.start()
 
+    with PROJECTS_LOCK:
+        proj_state = PROJECTS[project_id]
     return _serialize_project(proj_state)
+
+
+@app.post("/api/batch/start")
+def api_start_batch(req: StartBatchRequest):
+    raw_names = [n.strip() for n in (req.names or []) if n and n.strip()]
+    seen_lower = set()
+    clean_names = []
+    for nm in raw_names:
+        if nm.lower() not in seen_lower:
+            seen_lower.add(nm.lower())
+            clean_names.append(nm)
+
+    if not clean_names:
+        raise HTTPException(status_code=400, detail="Vui lòng nhập ít nhất 1 tên nhân vật.")
+
+    output_folder = (req.output_folder or DEFAULT_OUTPUT_DIR).strip() or DEFAULT_OUTPUT_DIR
+    batch_id = f"batch_{int(time.time())}_{uuid.uuid4().hex[:4]}"
+    max_keep = max(10, len(clean_names) + 4)
+
+    # Pre-create the 1st celebrity project immediately so the UI can display its Storyboard right away
+    first_req = StartPipelineRequest(
+        name=clean_names[0],
+        output_folder=output_folder,
+        news_duration=req.news_duration,
+        year_clip_duration=req.year_clip_duration,
+        auto_render=True,
+    )
+    first_pid = _create_project_record(first_req, max_keep=max_keep)
+
+    batch_state = {
+        "batch_id": batch_id,
+        "created_at": time.time(),
+        "status": "running",
+        "output_folder": output_folder,
+        "news_duration": req.news_duration,
+        "year_clip_duration": req.year_clip_duration,
+        "total_count": len(clean_names),
+        "completed_count": 0,
+        "current_index": 0,
+        "items": [
+            {
+                "index": idx,
+                "name": nm,
+                "project_id": first_pid if idx == 0 else None,
+                "status": "running" if idx == 0 else "queued",
+                "progress_pct": 5 if idx == 0 else 0,
+                "progress_message": "Đang khởi tạo..." if idx == 0 else "Đang chờ tới lượt...",
+                "total_duration": 0.0,
+                "output_path": "",
+                "error": None,
+            }
+            for idx, nm in enumerate(clean_names)
+        ],
+    }
+
+    with PROJECTS_LOCK:
+        BATCHES[batch_id] = batch_state
+        first_proj = _serialize_project(PROJECTS[first_pid])
+
+    t = threading.Thread(target=_run_batch_worker, args=(batch_id, max_keep), daemon=True)
+    t.start()
+
+    return {
+        "batch": batch_state,
+        "first_project": first_proj,
+    }
+
+
+def _sync_batch_items(batch_id: str) -> Optional[Dict[str, Any]]:
+    with PROJECTS_LOCK:
+        b = BATCHES.get(batch_id)
+        if not b:
+            return None
+        for item in b.get("items", []):
+            pid = item.get("project_id")
+            if pid and pid in PROJECTS:
+                p = PROJECTS[pid]
+                item["progress_pct"] = p.get("progress_pct", item.get("progress_pct", 0))
+                item["progress_message"] = p.get("progress_message", item.get("progress_message", ""))
+                if p.get("celeb_info") and p["celeb_info"].get("name"):
+                    item["display_name"] = p["celeb_info"]["name"]
+                if p.get("final_video") and p["final_video"].get("output_path"):
+                    item["total_duration"] = p["final_video"].get("total_duration", 0.0)
+                    item["output_path"] = p["final_video"].get("output_path", "")
+                    if item["status"] != "running":
+                        item["status"] = "completed"
+        b["completed_count"] = sum(1 for x in b.get("items", []) if x.get("status") == "completed")
+        return json.loads(json.dumps(b, default=str))
+
+
+def _run_batch_worker(batch_id: str, max_keep: int = 12):
+    with PROJECTS_LOCK:
+        b = BATCHES.get(batch_id)
+        if not b:
+            return
+        items_len = len(b["items"])
+        output_folder = b["output_folder"]
+        news_dur = b["news_duration"]
+        year_dur = b["year_clip_duration"]
+
+    for idx in range(items_len):
+        with PROJECTS_LOCK:
+            b = BATCHES.get(batch_id)
+            if not b:
+                return
+            b["current_index"] = idx
+            item = b["items"][idx]
+            nm = item["name"]
+            pid = item.get("project_id")
+            item["status"] = "running"
+
+        if not pid:
+            try:
+                p_req = StartPipelineRequest(
+                    name=nm,
+                    output_folder=output_folder,
+                    news_duration=news_dur,
+                    year_clip_duration=year_dur,
+                    auto_render=True,
+                )
+                pid = _create_project_record(p_req, max_keep=max_keep)
+                with PROJECTS_LOCK:
+                    BATCHES[batch_id]["items"][idx]["project_id"] = pid
+            except Exception as e:
+                with PROJECTS_LOCK:
+                    BATCHES[batch_id]["items"][idx]["status"] = "error"
+                    BATCHES[batch_id]["items"][idx]["error"] = str(e)
+                continue
+
+        try:
+            _run_full_pipeline_worker(pid, auto_render=True)
+            with PROJECTS_LOCK:
+                p = PROJECTS.get(pid, {})
+                fv = p.get("final_video")
+                if fv and fv.get("output_path"):
+                    BATCHES[batch_id]["items"][idx]["status"] = "completed"
+                    BATCHES[batch_id]["items"][idx]["progress_pct"] = 100
+                    BATCHES[batch_id]["items"][idx]["total_duration"] = fv.get("total_duration", 0.0)
+                    BATCHES[batch_id]["items"][idx]["output_path"] = fv.get("output_path", "")
+                else:
+                    BATCHES[batch_id]["items"][idx]["status"] = "error"
+                    BATCHES[batch_id]["items"][idx]["error"] = p.get("error") or "Chưa xuất được file MP4"
+        except Exception as e:
+            with PROJECTS_LOCK:
+                BATCHES[batch_id]["items"][idx]["status"] = "error"
+                BATCHES[batch_id]["items"][idx]["error"] = str(e)
+
+    with PROJECTS_LOCK:
+        if batch_id in BATCHES:
+            BATCHES[batch_id]["status"] = "completed"
+            BATCHES[batch_id]["completed_count"] = sum(
+                1 for x in BATCHES[batch_id]["items"] if x.get("status") == "completed"
+            )
+
+
+@app.get("/api/batch/{batch_id}")
+def api_get_batch(batch_id: str):
+    state = _sync_batch_items(batch_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Không tìm thấy lô chạy hàng loạt.")
+    return state
+
+
+@app.get("/api/batch-latest")
+def api_get_latest_batch():
+    with PROJECTS_LOCK:
+        if not BATCHES:
+            return {"batch_id": None}
+        latest_bid = max(BATCHES.keys(), key=lambda k: BATCHES[k].get("created_at", 0))
+    return _sync_batch_items(latest_bid) or {"batch_id": None}
 
 
 def _compute_year_window(years: List[int], idx: int) -> tuple:
@@ -407,7 +595,7 @@ def _compute_year_window(years: List[int], idx: int) -> tuple:
     return (min_yr, max_yr)
 
 
-def _run_full_pipeline_worker(project_id: str):
+def _run_full_pipeline_worker(project_id: str, auto_render: bool = False):
     pdir = _project_dir(project_id)
     with PROJECTS_LOCK:
         proj = PROJECTS[project_id]
@@ -659,10 +847,29 @@ def _run_full_pipeline_worker(project_id: str):
         ready_cnt = (1 if PROJECTS[project_id].get("news_clip", {}).get("status") == "ready" else 0) + len(
             [yc for yc in PROJECTS[project_id].get("year_clips", []) if yc.get("status") == "ready"]
         )
-        PROJECTS[project_id]["status"] = "ready_for_preview"
-        PROJECTS[project_id]["progress_pct"] = 100
-        PROJECTS[project_id]["progress_message"] = f"Đã cắt xong {ready_cnt} đoạn"
+        if auto_render:
+            PROJECTS[project_id]["progress_pct"] = 95
+            PROJECTS[project_id]["progress_message"] = f"Đang tự động xuất file MP4 cho {celeb_name}..."
+        else:
+            PROJECTS[project_id]["status"] = "ready_for_preview"
+            PROJECTS[project_id]["progress_pct"] = 100
+            PROJECTS[project_id]["progress_message"] = f"Đã cắt xong {ready_cnt} đoạn"
     _save_project_state(project_id)
+
+    if auto_render:
+        try:
+            _render_project_internal(project_id, allow_missing_news=True)
+            with PROJECTS_LOCK:
+                PROJECTS[project_id]["progress_pct"] = 100
+                PROJECTS[project_id]["progress_message"] = f"Đã tự động xuất MP4 hoàn tất ({ready_cnt} đoạn)"
+            _save_project_state(project_id)
+        except Exception as e:
+            with PROJECTS_LOCK:
+                PROJECTS[project_id]["status"] = "ready_for_preview"
+                PROJECTS[project_id]["progress_pct"] = 100
+                PROJECTS[project_id]["error"] = str(e)
+                PROJECTS[project_id]["progress_message"] = f"Đã cắt {ready_cnt} đoạn (Lỗi xuất MP4 tự động: {e})"
+            _save_project_state(project_id)
 
 
 @app.get("/api/projects/{project_id}")
@@ -691,6 +898,18 @@ def api_swap_news(project_id: str, req: SwapNewsRequest):
     pdir = _project_dir(project_id)
     celeb_name = proj["celeb_info"]["name"]
     current_news = proj.get("news_clip") or {}
+
+    if req.action == "clear":
+        with PROJECTS_LOCK:
+            PROJECTS[project_id]["news_clip"] = {
+                "status": "cleared",
+                "title": "Đã xóa bản tin mở đầu (Bấm Chỉnh giây để dán link mới, hoặc Xuất MP4 chỉ gồm các cảnh năm)",
+                "duration_sec": 0.0,
+                "start_sec": 0.0,
+                "candidates": current_news.get("candidates", []),
+            }
+        _save_project_state(project_id)
+        return _serialize_project(PROJECTS[project_id])
 
     if req.start_sec is not None and not req.custom_url and req.candidate_index is None:
         dur = req.duration_sec or float(current_news.get("duration_sec") or proj.get("news_duration") or 11.5)
@@ -904,16 +1123,30 @@ def api_swap_year(project_id: str, req: SwapYearClipRequest):
     return _serialize_project(PROJECTS[project_id])
 
 
-@app.post("/api/projects/{project_id}/render")
-def api_render_project(project_id: str, req: RenderRequest):
+def _render_project_internal(
+    project_id: str,
+    output_folder: Optional[str] = None,
+    layout: str = "center_band",
+    allow_missing_news: bool = False,
+) -> Dict[str, Any]:
     with PROJECTS_LOCK:
         proj = PROJECTS.get(project_id)
     if not proj:
         raise HTTPException(status_code=404, detail="Không tìm thấy dự án.")
 
     news_clip = proj.get("news_clip")
-    if not news_clip or not news_clip.get("clip_path") or not os.path.exists(news_clip["clip_path"]):
-        raise HTTPException(status_code=400, detail="Đoạn video bản tin mở đầu chưa sẵn sàng.")
+    is_news_cleared = bool(news_clip and news_clip.get("status") == "cleared")
+    has_valid_news = bool(
+        news_clip
+        and news_clip.get("status") == "ready"
+        and news_clip.get("clip_path")
+        and os.path.exists(news_clip["clip_path"])
+    )
+
+    if not has_valid_news and not is_news_cleared and not allow_missing_news:
+        raise HTTPException(status_code=400, detail="Đoạn video bản tin mở đầu chưa sẵn sàng (Hoặc bấm ✕ để xóa bản tin nếu muốn xuất riêng các năm).")
+
+    effective_news = news_clip if has_valid_news else None
 
     ready_year_clips = [
         yc
@@ -930,7 +1163,7 @@ def api_render_project(project_id: str, req: RenderRequest):
     dy = celeb.get("death_year", "")
     out_filename = f"{safe_celeb} {by}-{dy}.mp4".strip()
 
-    target_folder = (req.output_folder or proj.get("output_folder") or DEFAULT_OUTPUT_DIR).strip()
+    target_folder = (output_folder or proj.get("output_folder") or DEFAULT_OUTPUT_DIR).strip()
     try:
         os.makedirs(target_folder, exist_ok=True)
     except Exception as e:
@@ -939,11 +1172,11 @@ def api_render_project(project_id: str, req: RenderRequest):
     output_path = os.path.normpath(os.path.join(target_folder, out_filename))
 
     res = render_final_timeline_video(
-        news_clip_info=news_clip,
+        news_clip_info=effective_news,
         year_clips_info=ready_year_clips,
         output_path=output_path,
         work_dir=pdir,
-        layout=req.layout,
+        layout=layout,
     )
     res["output_folder"] = target_folder
 
@@ -953,6 +1186,16 @@ def api_render_project(project_id: str, req: RenderRequest):
         PROJECTS[project_id]["status"] = "completed"
     _save_project_state(project_id)
     return _serialize_project(PROJECTS[project_id])
+
+
+@app.post("/api/projects/{project_id}/render")
+def api_render_project(project_id: str, req: RenderRequest):
+    return _render_project_internal(
+        project_id=project_id,
+        output_folder=req.output_folder,
+        layout=req.layout,
+        allow_missing_news=False,
+    )
 
 
 @app.get("/api/projects/{project_id}/final-video")

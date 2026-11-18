@@ -54,15 +54,28 @@
         </div>
 
         <!-- Inputs: Name + Output Folder -->
-        <div class="flex items-center gap-3 flex-1 min-w-[300px] max-w-2xl flex-wrap sm:flex-nowrap">
-          <div class="flex-1 min-w-[190px]">
-            <label for="celebNameInput" class="block text-xs font-semibold text-slate-600 mb-1">1. Tên người nổi tiếng</label>
-            <div class="flex gap-1.5">
+        <div class="flex items-start gap-3 flex-1 min-w-[300px] max-w-2xl flex-wrap sm:flex-nowrap">
+          <div class="flex-1 min-w-[210px]">
+            <div class="flex items-center justify-between mb-1">
+              <label for="celebNameInput" class="block text-xs font-semibold text-slate-600">
+                1. Tên người nổi tiếng <span class="text-slate-400 font-normal">(1 hoặc nhiều tên)</span>
+              </label>
+              <button
+                id="btnToggleBatchInput"
+                type="button"
+                onclick="toggleBatchInputMode()"
+                class="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 hover:underline cursor-pointer"
+                title="Chuyển sang khung nhập nhiều dòng để dán danh sách nhiều người nổi tiếng chạy hàng loạt"
+              >
+                📋 Nhập nhiều dòng
+              </button>
+            </div>
+            <div id="singleCelebInputWrap" class="flex gap-1.5">
               <input
                 id="celebNameInput"
                 type="text"
                 value="Catherine O'Hara"
-                placeholder="Ví dụ: Catherine O'Hara, Matthew Perry..."
+                placeholder="Nhập 1 tên hoặc nhiều tên cách nhau dấu phẩy (VD: Catherine O'Hara, Matthew Perry)..."
                 onchange="onCelebNameChange()"
                 class="w-full px-3 py-2 rounded-lg bg-slate-50 border border-slate-300 text-slate-900 text-sm font-semibold focus:outline-none focus:border-blue-500 focus:bg-white transition"
               />
@@ -71,10 +84,21 @@
                 type="button"
                 onclick="lookupCelebYears(true)"
                 class="px-2.5 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 text-xs font-semibold shrink-0 transition cursor-pointer"
-                title="Tra cứu Wikipedia để tự động lấy năm sinh/mất và gợi ý các mốc năm sự nghiệp của nhân vật này"
+                title="Tra cứu Wikipedia để tự động lấy năm sinh/mất và thay thế bằng các mốc năm của nhân vật mới"
               >
                 🔍 Tra năm
               </button>
+            </div>
+            <div id="batchCelebInputWrap" class="hidden space-y-1">
+              <textarea
+                id="celebBatchTextarea"
+                rows="3"
+                placeholder="Nhập danh sách nhân vật (mỗi dòng 1 tên hoặc cách nhau bằng dấu phẩy):&#10;Catherine O'Hara&#10;Matthew Perry&#10;Alan Rickman"
+                class="w-full px-3 py-2 rounded-lg bg-slate-50 border border-indigo-300 text-slate-900 text-xs font-semibold focus:outline-none focus:border-indigo-600 focus:bg-white transition"
+              ></textarea>
+              <div class="text-[11px] text-indigo-700 font-medium">
+                💡 Khi nhập từ 2 nhân vật trở lên, bấm <strong>🚀 1. Tạo Video</strong> sẽ tự động chạy một mạch (Tìm & Cắt + Xuất luôn file MP4) cho từng người!
+              </div>
             </div>
           </div>
           <div class="flex-1 min-w-[220px]">
@@ -101,7 +125,7 @@
         </div>
 
         <!-- Main Action Buttons -->
-        <div class="flex items-center gap-2.5">
+        <div class="flex items-center gap-2 flex-wrap">
           <button
             id="btnStartPipeline"
             type="button"
@@ -118,6 +142,15 @@
           >
             <span id="btnRenderLabel">💾 2. Xuất MP4</span>
             <span id="btnExportDuration"></span>
+          </button>
+          <button
+            id="btnClearAll"
+            type="button"
+            onclick="clearAllStoryboard()"
+            class="px-3 py-2.5 rounded-xl bg-slate-100 hover:bg-rose-50 border border-slate-300 hover:border-rose-300 text-slate-700 hover:text-rose-700 text-xs font-bold transition cursor-pointer"
+            title="Xóa sạch toàn bộ các cảnh trên bảng lưới để làm mới"
+          >
+            🗑️ Clear tất cả
           </button>
         </div>
       </div>
@@ -407,6 +440,30 @@
       </div>
     </div>
 
+    <!-- Batch Switcher Bar (Visible when running/reviewing multiple celebrities in Batch Mode) -->
+    <div
+      id="batchSwitcherBar"
+      class="hidden bg-white border-2 border-indigo-200 rounded-xl p-3.5 shadow-xs space-y-2.5"
+    >
+      <div class="flex items-center justify-between gap-2 flex-wrap">
+        <div class="flex items-center gap-2">
+          <span class="px-2.5 py-0.5 rounded-lg bg-indigo-600 text-white font-bold text-xs">📚 CHẠY HÀNG LOẠT</span>
+          <span id="batchSummaryText" class="text-xs font-bold text-slate-800">Đang xử lý...</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-[11px] text-slate-500">💡 Bấm vào tên nhân vật bất kỳ bên dưới để xem bảng lưới, đổi cảnh và xuất lại MP4:</span>
+          <button
+            type="button"
+            onclick="openOutputFolder()"
+            class="px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 text-xs font-bold cursor-pointer"
+          >
+            📂 Mở thư mục Output
+          </button>
+        </div>
+      </div>
+      <div id="batchTabsContainer" class="flex items-center gap-2 flex-wrap"></div>
+    </div>
+
     <!-- Storyboard Video Grid (4 columns) -->
     <div id="storyboardGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
       <!-- Populated dynamically by JS -->
@@ -418,6 +475,11 @@
     let currentProjectId = null;
     let currentProject = null;
     let pollTimer = null;
+    let currentBatchId = null;
+    let currentBatch = null;
+    let batchPollTimer = null;
+    let batchFollowActive = true;
+    let isBatchInputExpanded = false;
     let lastExportedPath = "";
     let lastLookedUpCeleb = "";
     let folderBrowserParentPath = "";
@@ -435,6 +497,49 @@
       return `${formatMMSS(st)} - ${formatMMSS(st + du)}`;
     }
 
+    function toggleBatchInputMode() {
+      isBatchInputExpanded = !isBatchInputExpanded;
+      const singleWrap = document.getElementById('singleCelebInputWrap');
+      const batchWrap = document.getElementById('batchCelebInputWrap');
+      const btn = document.getElementById('btnToggleBatchInput');
+      const singleIn = document.getElementById('celebNameInput');
+      const batchIn = document.getElementById('celebBatchTextarea');
+
+      if (isBatchInputExpanded) {
+        if (singleIn.value.trim() && !batchIn.value.trim()) {
+          batchIn.value = singleIn.value.split(/[,;\n]+/).map(x => x.trim()).filter(Boolean).join('\n');
+        }
+        singleWrap.classList.add('hidden');
+        batchWrap.classList.remove('hidden');
+        btn.innerText = '👤 Nhập 1 dòng';
+        batchIn.focus();
+      } else {
+        const lines = batchIn.value.split(/[,;\n]+/).map(x => x.trim()).filter(Boolean);
+        if (lines.length) {
+          singleIn.value = lines.join(', ');
+        }
+        batchWrap.classList.add('hidden');
+        singleWrap.classList.remove('hidden');
+        btn.innerText = '📋 Nhập nhiều dòng';
+      }
+    }
+
+    function parseCelebNamesInput() {
+      const raw = isBatchInputExpanded
+        ? (document.getElementById('celebBatchTextarea').value || '')
+        : (document.getElementById('celebNameInput').value || '');
+      const seen = new Set();
+      const names = [];
+      for (const part of raw.split(/[\n,;]+/)) {
+        const clean = part.trim();
+        if (clean && !seen.has(clean.toLowerCase())) {
+          seen.add(clean.toLowerCase());
+          names.append ? names.append(clean) : names.push(clean);
+        }
+      }
+      return names;
+    }
+
     function parseYearsInput() {
       const raw = (document.getElementById('yearsListInput').value || '').trim();
       if (!raw) return null;
@@ -445,13 +550,81 @@
       return arr.length ? arr : null;
     }
 
+    function wipeStoryboardDOM() {
+      const grid = document.getElementById('storyboardGrid');
+      if (grid) grid.innerHTML = '';
+      document.getElementById('exportedBanner').classList.add('hidden');
+    }
+
+    function clearAllStoryboard() {
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+      if (batchPollTimer) {
+        clearInterval(batchPollTimer);
+        batchPollTimer = null;
+      }
+      currentProjectId = null;
+      currentProject = null;
+      currentBatchId = null;
+      currentBatch = null;
+      lastLookedUpCeleb = "";
+
+      document.getElementById('celebNameInput').value = '';
+      document.getElementById('celebBatchTextarea').value = '';
+      document.getElementById('yearsListInput').value = '';
+      document.getElementById('celebMetaName').innerText = 'Chưa chọn nhân vật';
+      document.getElementById('celebMetaSpan').innerText = '(Nhập tên nhân vật mới để bắt đầu)';
+      document.getElementById('totalDurationDisplay').innerText = '0.0 giây';
+      document.getElementById('btnExportDuration').innerText = '';
+      document.getElementById('batchSwitcherBar').classList.add('hidden');
+      document.getElementById('progressBarWrap').classList.add('hidden');
+
+      wipeStoryboardDOM();
+
+      const grid = document.getElementById('storyboardGrid');
+      grid.innerHTML = `
+        <div class="col-span-full bg-white border border-dashed border-slate-300 rounded-2xl p-10 text-center space-y-2">
+          <div class="text-base font-bold text-slate-700">✨ Đã xóa sạch toàn bộ cảnh trên bảng lưới</div>
+          <div class="text-xs text-slate-500">Hãy nhập tên 1 hoặc nhiều người nổi tiếng ở ô trên cùng và bấm <strong>🚀 1. Tạo Video (Tìm & Cắt)</strong> để bắt đầu.</div>
+        </div>
+      `;
+
+      const statusBadge = document.getElementById('statusBadge');
+      statusBadge.className = 'px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-300 font-semibold';
+      statusBadge.innerText = '✔ Đã làm mới';
+      document.getElementById('statusText').innerHTML = 'Bảng lưới đã sẵn sàng cho nhân vật mới.';
+
+      const btnStart = document.getElementById('btnStartPipeline');
+      btnStart.disabled = false;
+      btnStart.innerText = '🚀 1. Tạo Video (Tìm & Cắt)';
+    }
+
     async function onCelebNameChange() {
+      const names = parseCelebNamesInput();
+      if (!names.length) return;
+      // Immediately clear old celebrity's clips if the typed name changed!
+      if (lastLookedUpCeleb && lastLookedUpCeleb !== names[0].toLowerCase()) {
+        currentProjectId = null;
+        currentProject = null;
+        wipeStoryboardDOM();
+      }
       await lookupCelebYears(true);
     }
 
     async function lookupCelebYears(updateGridPlaceholders = false) {
-      const name = document.getElementById('celebNameInput').value.trim();
-      if (!name) return null;
+      const names = parseCelebNamesInput();
+      if (!names.length) return null;
+      const name = names[0];
+
+      // Immediately replace old celebrity's scenes when looking up a new celebrity
+      if (updateGridPlaceholders && lastLookedUpCeleb && lastLookedUpCeleb !== name.toLowerCase()) {
+        currentProjectId = null;
+        currentProject = null;
+        wipeStoryboardDOM();
+      }
+
       const btn = document.getElementById('btnLookupCeleb');
       if (btn) {
         btn.disabled = true;
@@ -475,7 +648,10 @@
         }
         if (info.recommended_years && info.recommended_years.length) {
           document.getElementById('yearsListInput').value = info.recommended_years.join(', ');
-          if (updateGridPlaceholders && (!currentProject || currentProject.status !== 'running')) {
+          if (updateGridPlaceholders) {
+            currentProjectId = null;
+            currentProject = null;
+            wipeStoryboardDOM();
             renderPlaceholderGridForYears(info.recommended_years);
           }
         }
@@ -600,19 +776,72 @@
       closeFolderPickerModal();
     }
 
-    // --- Pipeline & Storyboard ---
+    // --- Pipeline, Batch Mode & Storyboard ---
     async function startPipeline() {
-      const name = document.getElementById('celebNameInput').value.trim();
+      const names = parseCelebNamesInput();
       const output_folder = document.getElementById('outputFolderInput').value.trim();
-      if (!name) {
-        alert('Vui lòng nhập tên người nổi tiếng!');
+      if (!names.length) {
+        alert('Vui lòng nhập ít nhất 1 tên người nổi tiếng!');
         return;
       }
 
       const btnStart = document.getElementById('btnStartPipeline');
       btnStart.disabled = true;
+      wipeStoryboardDOM();
+
+      // CASE 1: BATCH MODE (2 or more celebrities entered -> Auto Find + Cut + Export MP4 sequentially)
+      if (names.length >= 2) {
+        btnStart.innerText = `⏳ Đang chạy hàng loạt (${names.length} người)...`;
+        try {
+          if (pollTimer) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+          }
+          if (batchPollTimer) {
+            clearInterval(batchPollTimer);
+            batchPollTimer = null;
+          }
+          const res = await fetch('/api/batch/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              names,
+              output_folder,
+              news_duration: 11.5,
+              year_clip_duration: 4.2
+            })
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            throw new Error(data.detail || 'Lỗi khởi tạo chạy hàng loạt');
+          }
+          currentBatch = data.batch;
+          currentBatchId = currentBatch.batch_id;
+          batchFollowActive = true;
+          renderBatchSwitcher(currentBatch);
+
+          if (data.first_project && data.first_project.project_id) {
+            currentProjectId = data.first_project.project_id;
+            lastLookedUpCeleb = names[0].toLowerCase();
+            renderStoryboard(data.first_project);
+          }
+
+          pollTimer = setInterval(pollProjectStatus, 1800);
+          batchPollTimer = setInterval(pollBatchStatus, 2000);
+        } catch (e) {
+          alert('Lỗi chạy hàng loạt: ' + e.message);
+          btnStart.disabled = false;
+          btnStart.innerText = '🚀 1. Tạo Video (Tìm & Cắt)';
+        }
+        return;
+      }
+
+      // CASE 2: SINGLE CELEBRITY MODE
+      const name = names[0];
       btnStart.innerText = '⏳ Đang tìm & cắt...';
-      document.getElementById('exportedBanner').classList.add('hidden');
+      document.getElementById('batchSwitcherBar').classList.add('hidden');
+      currentBatchId = null;
+      currentBatch = null;
 
       try {
         let years = parseYearsInput();
@@ -655,6 +884,117 @@
       }
     }
 
+    async function pollBatchStatus() {
+      if (!currentBatchId) return;
+      try {
+        const res = await fetch(`/api/batch/${currentBatchId}`);
+        if (!res.ok) return;
+        const b = await res.json();
+        currentBatch = b;
+        renderBatchSwitcher(b);
+
+        // If user hasn't manually pinned another tab, auto-follow the currently running celebrity
+        if (batchFollowActive && b.items && b.items[b.current_index]) {
+          const activeItem = b.items[b.current_index];
+          if (activeItem.project_id && activeItem.project_id !== currentProjectId) {
+            currentProjectId = activeItem.project_id;
+            wipeStoryboardDOM();
+            await pollProjectStatus();
+            if (!pollTimer) {
+              pollTimer = setInterval(pollProjectStatus, 1800);
+            }
+          }
+        }
+
+        if (b.status !== 'running') {
+          clearInterval(batchPollTimer);
+          batchPollTimer = null;
+          const btnStart = document.getElementById('btnStartPipeline');
+          btnStart.disabled = false;
+          btnStart.innerText = '🚀 1. Tạo Video (Tìm & Cắt)';
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    function renderBatchSwitcher(batch) {
+      const bar = document.getElementById('batchSwitcherBar');
+      const summaryEl = document.getElementById('batchSummaryText');
+      const tabsEl = document.getElementById('batchTabsContainer');
+      if (!batch || !batch.items || !batch.items.length) {
+        bar.classList.add('hidden');
+        return;
+      }
+      bar.classList.remove('hidden');
+
+      const doneCnt = Number(batch.completed_count || 0);
+      const totalCnt = Number(batch.total_count || batch.items.length);
+      if (batch.status === 'running') {
+        summaryEl.innerText = `Đang chạy tự động: Hoàn tất ${doneCnt}/${totalCnt} video MP4`;
+      } else {
+        summaryEl.innerText = `🎉 Đã chạy xong ${doneCnt}/${totalCnt} nhân vật! (Tất cả file MP4 đã lưu trong thư mục Output)`;
+      }
+
+      tabsEl.innerHTML = batch.items.map((item, idx) => {
+        const isSelected = item.project_id && item.project_id === currentProjectId;
+        const labelName = item.display_name || item.name;
+        let statusIcon = '🕒';
+        let metaBadge = 'Chờ chạy';
+        let colorCls = 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200';
+
+        if (item.status === 'completed') {
+          statusIcon = '✅';
+          metaBadge = item.total_duration ? `${Number(item.total_duration).toFixed(1)}s` : 'Đã xuất MP4';
+          colorCls = 'bg-emerald-50 text-emerald-900 border-emerald-300 hover:bg-emerald-100';
+        } else if (item.status === 'running') {
+          statusIcon = '⏳';
+          metaBadge = `${item.progress_pct || 5}%`;
+          colorCls = 'bg-blue-50 text-blue-900 border-blue-300 hover:bg-blue-100';
+        } else if (item.status === 'error') {
+          statusIcon = '⚠️';
+          metaBadge = 'Lỗi';
+          colorCls = 'bg-rose-50 text-rose-800 border-rose-300 hover:bg-rose-100';
+        }
+
+        const ringCls = isSelected ? 'ring-2 ring-indigo-600 font-bold shadow-xs' : 'font-semibold';
+        return `
+          <button
+            type="button"
+            onclick="selectBatchItem(${idx})"
+            class="px-3 py-1.5 rounded-xl border text-xs flex items-center gap-1.5 transition cursor-pointer ${colorCls} ${ringCls}"
+            title="Bấm để xem bảng lưới Storyboard của ${labelName}"
+          >
+            <span>${statusIcon}</span>
+            <span>${idx + 1}. ${labelName}</span>
+            <span class="px-1.5 py-0.5 rounded bg-white/80 text-[10px] font-mono">${metaBadge}</span>
+          </button>
+        `;
+      }).join('');
+    }
+
+    async function selectBatchItem(idx) {
+      if (!currentBatch || !currentBatch.items || !currentBatch.items[idx]) return;
+      const item = currentBatch.items[idx];
+      if (!item.project_id) {
+        alert(`Nhân vật "${item.name}" đang chờ tới lượt xử lý!`);
+        return;
+      }
+      batchFollowActive = (idx === currentBatch.current_index && currentBatch.status === 'running');
+      currentProjectId = item.project_id;
+      wipeStoryboardDOM();
+      renderBatchSwitcher(currentBatch);
+
+      const res = await fetch(`/api/projects/${currentProjectId}`);
+      if (res.ok) {
+        const proj = await res.json();
+        renderStoryboard(proj);
+        if (proj.status === 'running' && !pollTimer) {
+          pollTimer = setInterval(pollProjectStatus, 1800);
+        }
+      }
+    }
+
     async function pollProjectStatus() {
       if (!currentProjectId) return;
       try {
@@ -662,7 +1002,7 @@
         if (!res.ok) return;
         const proj = await res.json();
         renderStoryboard(proj);
-        if (proj.status !== 'running') {
+        if (proj.status !== 'running' && (!currentBatch || currentBatch.status !== 'running')) {
           clearInterval(pollTimer);
           pollTimer = null;
           const btnStart = document.getElementById('btnStartPipeline');
@@ -677,7 +1017,7 @@
     function computeTotalDuration(proj) {
       if (!proj) return 0;
       let total = 0;
-      if (proj.news_clip && proj.news_clip.duration_sec) {
+      if (proj.news_clip && proj.news_clip.status !== 'cleared' && proj.news_clip.duration_sec) {
         total += Number(proj.news_clip.duration_sec) || 0;
       }
       for (const yc of (proj.year_clips || [])) {
@@ -694,6 +1034,26 @@
 
       const expDurEl = document.getElementById('btnExportDuration');
       if (expDurEl) expDurEl.innerText = totalDur > 0 ? `(${totalDur}s)` : '';
+
+      // Sync Exported MP4 Notification Banner with the currently displayed project
+      const expBanner = document.getElementById('exportedBanner');
+      if (proj.final_video && proj.final_video.output_path) {
+        const fv = proj.final_video;
+        lastExportedPath = fv.output_path;
+        document.getElementById('exportedFilePath').innerText = fv.output_path;
+        document.getElementById('exportedFileMeta').innerText = `${fv.total_duration}s • ${fv.file_size_mb} MB`;
+        expBanner.classList.remove('hidden');
+        if (fv.video_url) {
+          document.getElementById('finalVideoPlayer').src = fv.video_url;
+          const dlLink = document.getElementById('btnDirectDownloadMp4');
+          if (dlLink) {
+            dlLink.href = fv.video_url;
+            dlLink.download = fv.output_path.split(/[\\/]/).pop();
+          }
+        }
+      } else {
+        expBanner.classList.add('hidden');
+      }
 
       if (proj.celeb_info) {
         const ci = proj.celeb_info;
@@ -713,9 +1073,10 @@
       const progressBarWrap = document.getElementById('progressBarWrap');
       const progressBarFill = document.getElementById('progressBarFill');
 
-      const readyNews = proj.news_clip && proj.news_clip.status === 'ready' ? 1 : 0;
+      const hasNews = proj.news_clip && proj.news_clip.status !== 'cleared';
+      const readyNews = hasNews && proj.news_clip.status === 'ready' ? 1 : 0;
       const readyYears = (proj.year_clips || []).filter(y => y.status === 'ready').length;
-      const totalClips = 1 + (proj.year_clips || []).length;
+      const totalClips = (hasNews ? 1 : 0) + (proj.year_clips || []).length;
       const readyClips = readyNews + readyYears;
 
       if (proj.status === 'running') {
@@ -728,7 +1089,7 @@
         progressBarWrap.classList.add('hidden');
         statusBadge.className = 'px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 font-semibold';
         statusBadge.innerText = `✔ Đã cắt xong ${readyClips}/${totalClips} đoạn`;
-        statusText.innerHTML = 'Xem trực tiếp video từng đoạn bên dưới. Bấm <strong>✨ Đổi cảnh</strong>, <strong>🔄 Đổi video</strong> hoặc <strong>➕ Cảnh 2</strong> (1 năm 2 cảnh liên tiếp).';
+        statusText.innerHTML = 'Xem trực tiếp video từng đoạn bên dưới. Bấm <strong>✨ Đổi cảnh</strong>, <strong>🔄 Đổi video</strong>, <strong>✂️ Chỉnh giây</strong> hoặc <strong>➕ Cảnh 2</strong>.';
       }
 
       const grid = document.getElementById('storyboardGrid');
@@ -769,6 +1130,10 @@
       Array.from(grid.children).forEach(el => {
         if (!validIds.has(el.id)) el.remove();
       });
+
+      if (currentBatch) {
+        renderBatchSwitcher(currentBatch);
+      }
     }
 
     function renderNewsCard(cardEl, nc) {
@@ -777,8 +1142,9 @@
       if (cardEl.getAttribute('data-sig') === sig) return;
       cardEl.setAttribute('data-sig', sig);
 
-      const dur = Number(nc.duration_sec || 11.5).toFixed(1);
-      const timeRange = formatRange(nc.start_sec || 0, nc.duration_sec || 11.5);
+      const isCleared = nc.status === 'cleared';
+      const dur = isCleared ? '0.0' : Number(nc.duration_sec || 11.5).toFixed(1);
+      const timeRange = isCleared ? 'Đã xóa bản tin' : formatRange(nc.start_sec || 0, nc.duration_sec || 11.5);
       const titleText = nc.title || 'Bản tin mở đầu thông báo về nhân vật';
 
       let mediaHtml = '';
@@ -792,6 +1158,13 @@
             preload="metadata"
             class="absolute inset-0 w-full h-full object-cover z-0"
           ></video>
+        `;
+      } else if (isCleared) {
+        mediaHtml = `
+          <div class="my-auto text-center text-slate-300 text-xs font-medium px-3 z-10 space-y-1">
+            <div class="text-amber-300 font-bold">🚫 Đã Clear Bản tin mở đầu</div>
+            <div class="text-[11px] text-slate-300">Bấm <strong>✂️ Chỉnh giây</strong> để dán link mới, hoặc bấm <strong>💾 Xuất MP4</strong> để xuất video chỉ gồm các cảnh năm.</div>
+          </div>
         `;
       } else if (nc.status === 'error') {
         mediaHtml = `
@@ -818,11 +1191,13 @@
           </div>
 
           <div class="flex items-center justify-between text-[11px] px-0.5">
-            <span class="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 font-semibold">🔊 Giữ tiếng gốc MC</span>
+            <span class="px-1.5 py-0.5 rounded ${isCleared ? 'bg-slate-100 text-slate-600' : 'bg-emerald-100 text-emerald-800'} font-semibold">
+              ${isCleared ? '🔇 Đang bỏ qua bản tin' : '🔊 Giữ tiếng gốc MC'}
+            </span>
             <span class="text-slate-500 font-mono">${timeRange}</span>
           </div>
           <div class="text-[11px] text-slate-600 truncate px-0.5" title="${titleText.replace(/"/g, '&quot;')}">
-            ${nc.url ? `<a href="${nc.url}" target="_blank" class="hover:text-blue-600 hover:underline">🔗 ${titleText}</a>` : titleText}
+            ${(!isCleared && nc.url) ? `<a href="${nc.url}" target="_blank" class="hover:text-blue-600 hover:underline">🔗 ${titleText}</a>` : titleText}
           </div>
 
           <div id="newsTrimDrawer" class="hidden bg-slate-50 border border-slate-200 rounded-lg p-2.5 space-y-2 text-xs">
@@ -843,20 +1218,30 @@
           </div>
         </div>
 
-        <div class="flex gap-2">
+        <div class="flex gap-1.5">
           <button
             type="button"
             onclick="swapNewsNext()"
             class="flex-1 py-1.5 px-2 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 font-semibold text-xs transition cursor-pointer"
+            title="Đổi sang video bản tin khác trên YouTube"
           >
             🔄 Đổi bản tin
           </button>
           <button
             type="button"
             onclick="toggleDrawer('newsTrimDrawer')"
-            class="py-1.5 px-2.5 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 font-semibold text-xs transition cursor-pointer"
+            class="py-1.5 px-2 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 font-semibold text-xs transition cursor-pointer"
+            title="Chỉnh giây bắt đầu, độ dài hoặc dán link YouTube cho bản tin"
           >
             ✂️ Chỉnh giây
+          </button>
+          <button
+            type="button"
+            onclick="clearNewsClip()"
+            class="py-1.5 px-2 rounded-lg bg-slate-100 hover:bg-rose-50 border border-slate-200 hover:border-rose-200 text-slate-500 hover:text-rose-600 font-bold text-xs transition cursor-pointer"
+            title="Clear/Xóa đoạn video bản tin mở đầu (Khi xuất MP4 sẽ chỉ gồm các cảnh năm)"
+          >
+            ✕
           </button>
         </div>
       `;
@@ -1019,6 +1404,36 @@
         const proj = await res.json();
         if (res.ok) renderStoryboard(proj);
         else alert(proj.detail || 'Không thể đổi bản tin');
+      } finally {
+        if (card) card.classList.remove('opacity-50', 'pointer-events-none');
+      }
+    }
+
+    async function clearNewsClip() {
+      if (!currentProjectId) {
+        const card = document.getElementById('card-news-intro');
+        if (card) {
+          card.removeAttribute('data-sig');
+          renderNewsCard(card, {
+            status: 'cleared',
+            title: 'Đã xóa bản tin mở đầu (Khi xuất MP4 sẽ chỉ gồm các cảnh năm)',
+            duration_sec: 0,
+            start_sec: 0
+          });
+        }
+        return;
+      }
+      const card = document.getElementById('card-news-intro');
+      if (card) card.classList.add('opacity-50', 'pointer-events-none');
+      try {
+        const res = await fetch(`/api/projects/${currentProjectId}/swap-news`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'clear' })
+        });
+        const proj = await res.json();
+        if (res.ok) renderStoryboard(proj);
+        else alert(proj.detail || 'Không thể xóa bản tin');
       } finally {
         if (card) card.classList.remove('opacity-50', 'pointer-events-none');
       }
@@ -1368,6 +1783,20 @@
     window.addEventListener('DOMContentLoaded', async () => {
       await initDefaultFolder();
       loadVersionBadge();
+      try {
+        const bRes = await fetch('/api/batch-latest');
+        if (bRes.ok) {
+          const bData = await bRes.json();
+          if (bData && bData.batch_id) {
+            currentBatch = bData;
+            currentBatchId = bData.batch_id;
+            renderBatchSwitcher(bData);
+            if (bData.status === 'running') {
+              batchPollTimer = setInterval(pollBatchStatus, 2000);
+            }
+          }
+        }
+      } catch (_) {}
       try {
         const res = await fetch('/api/projects-latest');
         if (res.ok) {

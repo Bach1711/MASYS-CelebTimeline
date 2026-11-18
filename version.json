@@ -1,8 +1,8 @@
 {
-  "sha": "cded7a549890ceda34eefb5271e177e9d784b1ab",
-  "short_sha": "cded7a5",
-  "message": "Add dynamic FFmpeg path resolution, setup_may_moi.bat, auto workspace cleanup & per-year custom URL/trim drawer",
-  "date": "2026-11-18 10:11:37 +0700",
+  "sha": "53fb18b7cefe561e1d4a65bd7f2a7785a0b74d37",
+  "short_sha": "53fb18b",
+  "message": "Implement Clear News, Clear All, auto-replace scenes on new celeb & Batch Mode auto-export with switcher tabs (CON-208, CON-209)",
+  "date": "2026-11-18 10:57:33 +0700",
   "author": "BachVu",
   "repo": "Bach1711/MASYS-CelebTimeline",
   "branch": "main"

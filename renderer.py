@@ -259,7 +259,7 @@ def normalize_segment_video(
 
 
 def render_final_timeline_video(
-    news_clip_info: Dict[str, Any],
+    news_clip_info: Optional[Dict[str, Any]],
     year_clips_info: List[Dict[str, Any]],
     output_path: str,
     work_dir: str,
@@ -267,7 +267,8 @@ def render_final_timeline_video(
 ) -> Dict[str, Any]:
     """
     Assemble the complete ~1-minute TikTok 9:16 (1080x1920, 30fps) video:
-    1. News Intro clip (8-15s) WITH original anchor speech audio (no year label).
+    1. Optional News Intro clip (8-15s) WITH original anchor speech audio (no year label).
+       If `news_clip_info` is None or cleared, skips news intro and exports year clips only.
     2. Year clips (3-4s each) COMPLETELY MUTED, WITH bold yellow Year text overlay (#FFE600).
     3. No background music mixed (users add music directly on TikTok when posting).
     """
@@ -277,21 +278,28 @@ def render_final_timeline_video(
 
     normalized_files: List[str] = []
 
-    # 1. Normalize News Intro (keeps original audio, no year label)
-    news_src = news_clip_info["clip_path"]
-    news_dur = float(news_clip_info.get("duration_sec") or get_video_duration(news_src) or 11.0)
-    norm_news = os.path.join(render_dir, "seg_000_news.mp4")
-    if not normalize_segment_video(
-        news_src,
-        norm_news,
-        duration_sec=news_dur,
-        keep_audio=True,
-        year_label=None,
-        layout=layout,
+    # 1. Normalize News Intro if present and not cleared (keeps original audio, no year label)
+    actual_news_dur = 0.0
+    if (
+        news_clip_info
+        and news_clip_info.get("status") != "cleared"
+        and news_clip_info.get("clip_path")
+        and os.path.exists(news_clip_info["clip_path"])
     ):
-        raise RuntimeError("Lỗi khi chuẩn hóa đoạn video Bản tin mở đầu.")
-    actual_news_dur = get_video_duration(norm_news) or news_dur
-    normalized_files.append(norm_news)
+        news_src = news_clip_info["clip_path"]
+        news_dur = float(news_clip_info.get("duration_sec") or get_video_duration(news_src) or 11.0)
+        norm_news = os.path.join(render_dir, "seg_000_news.mp4")
+        if not normalize_segment_video(
+            news_src,
+            norm_news,
+            duration_sec=news_dur,
+            keep_audio=True,
+            year_label=None,
+            layout=layout,
+        ):
+            raise RuntimeError("Lỗi khi chuẩn hóa đoạn video Bản tin mở đầu.")
+        actual_news_dur = get_video_duration(norm_news) or news_dur
+        normalized_files.append(norm_news)
 
     # 2. Normalize each Year clip (muted original audio + yellow Year overlay)
     total_years_dur = 0.0

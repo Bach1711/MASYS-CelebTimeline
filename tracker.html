@@ -60,7 +60,7 @@
           <span id="statTodo" class="px-3 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-300">Todo: 0</span>
           <span id="statInProgress" class="px-3 py-1 rounded-full bg-blue-100 text-blue-800 border border-blue-200">In Progress: 0</span>
           <span id="statReview" class="px-3 py-1 rounded-full bg-amber-100 text-amber-800 border border-amber-200">Review: 0</span>
-          <span id="statDone" class="px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">Done: 6</span>
+          <span id="statDone" class="px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">Done: 8</span>
         </div>
       </div>
 
@@ -68,7 +68,7 @@
         <div id="overallProgressBar" class="bg-emerald-500 h-full transition-all duration-300" style="width: 100%"></div>
       </div>
       <div class="flex justify-between text-xs text-slate-600 font-semibold">
-        <span id="overallProgressLabel">Hoàn thành: 100% (6/6 Tickets)</span>
+        <span id="overallProgressLabel">Hoàn thành: 100% (8/8 Tickets)</span>
         <span>Chuẩn nghiệm thu: Khung dọc 9:16 (1080×1920) • Giữ tiếng bản tin đầu • Tắt tiếng các năm</span>
       </div>
     </div>
@@ -184,6 +184,34 @@
           "Nút 🔄 Kiểm tra Update trên thanh công cụ kiểm tra chính xác phiên bản hiện tại so với GitHub Bach1711/MASYS-CelebTimeline và hiển thị danh sách thay đổi mới.",
           "Nút ⬇️ Cập nhật ngay cập nhật thành công toàn bộ mã nguồn (Dual-Engine: Git hoặc GitHub ZIP), giữ nguyên dữ liệu workspace/ và tự khởi động lại ứng dụng.",
           "Hỗ trợ đẩy nhanh code mới lên GitHub từ máy Dev (nút 📤 Đẩy lên GitHub hoặc publish_update.bat) để các máy khác nhận bản cập nhật ngay."
+        ]
+      },
+      {
+        id: "CON-208",
+        url: "https://linear.app/conducdaudan/issue/CON-208/ux-and-storyboard-nut-clear-ban-tin-clear-tat-ca-and-tu-djong-thay",
+        title: "[UX & Storyboard] Nút Clear Bản tin, Clear Tất cả & Tự động thay cảnh khi nhập nhân vật mới",
+        priority: "Urgent",
+        status: "Done",
+        module: "app.py, renderer.py, static/index.html",
+        description: "Thêm nút ✕ (Clear) trên ô Bản tin mở đầu (cho phép xóa bản tin về trống hoặc xuất MP4 chỉ gồm các cảnh năm nếu để trống), nút 🗑️ Clear tất cả trên thanh điều khiển, và tự động xóa/thay thế toàn bộ cảnh của nhân vật cũ ngay khi nhập tên nhân vật mới.",
+        dod: [
+          "Ô 📺 BẢN TIN MỞ ĐẦU có nút ✕ xóa bản tin về trống; hỗ trợ xuất MP4 chỉ gồm các cảnh năm nếu bản tin đã bị clear.",
+          "Thanh điều khiển có nút 🗑️ Clear tất cả xóa toàn bộ cảnh trên bảng lưới về trạng thái mới.",
+          "Khi nhập tên nhân vật mới và bấm Tra năm / Tạo Video, toàn bộ cảnh của nhân vật cũ tự động được thay thế ngay bằng cảnh của nhân vật mới."
+        ]
+      },
+      {
+        id: "CON-209",
+        url: "https://linear.app/conducdaudan/issue/CON-209/batch-mode-chay-hang-loat-nhieu-nhan-vat-tu-djong-tim-cat-xuat-mp4-and",
+        title: "[Batch Mode] Chạy Hàng Loạt nhiều nhân vật (Tự động Tìm, Cắt, Xuất MP4 & Lưu Tab xem/sửa lại)",
+        priority: "Urgent",
+        status: "Done",
+        module: "app.py, static/index.html",
+        description: "Cho phép nhập nhiều tên nhân vật ngay trên thanh điều khiển (dấu phẩy hoặc khung nhiều dòng), tự động chạy một mạch Tìm & Cắt + Xuất luôn file MP4 cho từng người, đồng thời hiển thị thanh Tab danh sách các nhân vật đã chạy để bấm vào bất kỳ người nào xem lại, đổi cảnh và xuất lại MP4.",
+        dod: [
+          "Hỗ trợ nhập nhiều tên nhân vật (ngăn cách bằng dấu phẩy hoặc mở khung nhập nhiều dòng) ngay trên thanh điều khiển.",
+          "Chạy tự động một mạch hết danh sách nhân vật: Tự động Tìm & Cắt VÀ Tự động Xuất file .mp4 vào thư mục Output cho từng người.",
+          "Hiển thị thanh Tab danh sách các nhân vật trong lô chạy, cho phép bấm vào từng người để xem lại Storyboard, chỉnh sửa cảnh và xuất lại MP4."
         ]
       }
     ];
