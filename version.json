@@ -1,8 +1,8 @@
 {
-  "sha": "dbae74fe2e501bb2b026f9e058917a46c1f90a3f",
-  "short_sha": "dbae74f",
-  "message": "Keep Web UI Update modal purely for client Check/Apply & use publish_update.bat for Dev publishing",
-  "date": "2026-11-18 10:02:12 +0700",
+  "sha": "cded7a549890ceda34eefb5271e177e9d784b1ab",
+  "short_sha": "cded7a5",
+  "message": "Add dynamic FFmpeg path resolution, setup_may_moi.bat, auto workspace cleanup & per-year custom URL/trim drawer",
+  "date": "2026-11-18 10:11:37 +0700",
   "author": "BachVu",
   "repo": "Bach1711/MASYS-CelebTimeline",
   "branch": "main"

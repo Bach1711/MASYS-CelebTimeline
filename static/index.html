@@ -929,6 +929,27 @@
           <div class="text-[11px] text-slate-600 truncate px-0.5" title="${titleText.replace(/"/g, '&quot;')}">
             ${yc.url ? `<a href="${yc.url}" target="_blank" class="hover:text-blue-600 hover:underline">🔗 ${titleText}</a>` : titleText}
           </div>
+
+          <div id="yearTrimDrawer_${slotIdx}" class="hidden bg-slate-50 border border-slate-200 rounded-lg p-2.5 space-y-2 text-xs">
+            <div class="grid grid-cols-3 gap-1.5">
+              <div>
+                <label class="block text-[10px] font-semibold text-slate-600">Giây đầu (s)</label>
+                <input id="yearTrimStart_${slotIdx}" type="number" step="0.5" value="${yc.start_sec || 0}" class="w-full px-1.5 py-1 rounded border border-slate-300 bg-white text-slate-900 font-mono text-xs" />
+              </div>
+              <div>
+                <label class="block text-[10px] font-semibold text-slate-600">Độ dài (s)</label>
+                <input id="yearTrimDur_${slotIdx}" type="number" step="0.2" min="2.5" max="8" value="${yc.duration_sec || 4.4}" class="w-full px-1.5 py-1 rounded border border-slate-300 bg-white text-slate-900 font-mono text-xs" />
+              </div>
+              <div>
+                <label class="block text-[10px] font-semibold text-slate-600">Nhãn năm</label>
+                <input id="yearCustomLabel_${slotIdx}" type="number" min="1930" max="2035" value="${yc.year}" class="w-full px-1.5 py-1 rounded border border-slate-300 bg-white text-slate-900 font-mono text-xs" />
+              </div>
+            </div>
+            <div class="flex gap-1.5">
+              <input id="yearCustomUrl_${slotIdx}" type="text" placeholder="Dán link YouTube riêng (tùy chọn)..." class="flex-1 px-2 py-1 rounded border border-slate-300 bg-white text-slate-800 text-xs" />
+              <button type="button" onclick="applyYearTrim(${yc.year}, ${slotIdx})" class="px-2.5 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs cursor-pointer">Áp dụng</button>
+            </div>
+          </div>
         </div>
         <div class="flex gap-1.5">
           <button
@@ -946,6 +967,14 @@
             title="Đổi sang video YouTube khác cho năm ${yc.year}"
           >
             🔄 Đổi video
+          </button>
+          <button
+            type="button"
+            onclick="toggleDrawer('yearTrimDrawer_${slotIdx}')"
+            class="py-1.5 px-2 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 font-semibold text-xs transition cursor-pointer"
+            title="Chỉnh giây bắt đầu, độ dài hoặc dán link YouTube riêng cho năm ${yc.year}"
+          >
+            ✂️
           </button>
           ${slotIdx > 0 ? `
           <button
@@ -1035,6 +1064,32 @@
 
     async function removeYearScene(year, slot_index) {
       await callSwapYear(year, slot_index, { year, slot_index, action: 'remove_scene' });
+    }
+
+    async function applyYearTrim(year, slot_index) {
+      const startEl = document.getElementById(`yearTrimStart_${slot_index}`);
+      const durEl = document.getElementById(`yearTrimDur_${slot_index}`);
+      const urlEl = document.getElementById(`yearCustomUrl_${slot_index}`);
+      const lblEl = document.getElementById(`yearCustomLabel_${slot_index}`);
+
+      const start_sec = startEl ? parseFloat(startEl.value) : null;
+      const duration_sec = (durEl && durEl.value) ? parseFloat(durEl.value) : 4.4;
+      const custom_url = (urlEl && urlEl.value.trim()) ? urlEl.value.trim() : null;
+      const new_year_label = (lblEl && lblEl.value) ? parseInt(lblEl.value, 10) : year;
+
+      const action = (custom_url && (start_sec === null || isNaN(start_sec) || start_sec === 0))
+        ? 'custom_url'
+        : 'custom_trim';
+
+      await callSwapYear(year, slot_index, {
+        year,
+        slot_index,
+        action,
+        start_sec: isNaN(start_sec) ? 0 : start_sec,
+        duration_sec,
+        custom_url,
+        new_year_label
+      });
     }
 
     async function callSwapYear(year, slot_index, payload) {

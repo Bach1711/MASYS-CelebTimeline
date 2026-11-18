@@ -139,6 +139,7 @@ class SwapYearClipRequest(BaseModel):
     start_sec: Optional[float] = None
     duration_sec: Optional[float] = None
     custom_url: Optional[str] = None
+    new_year_label: Optional[int] = None
 
 
 class RenderRequest(BaseModel):
@@ -262,12 +263,65 @@ def api_lookup(req: LookupRequest):
     return info
 
 
+def _cleanup_old_projects(max_keep: int = 5, exclude_project_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Automatically clean up old draft project directories in `workspace/` (keeping the `max_keep`
+    most recent projects) so the hard drive never fills up over hundreds of video runs.
+    """
+    removed_count = 0
+    freed_bytes = 0
+    if not os.path.exists(WORKSPACE_DIR):
+        return {"removed_projects": 0, "freed_mb": 0.0}
+
+    proj_entries = []
+    for d in os.listdir(WORKSPACE_DIR):
+        if not d.startswith("proj_"):
+            continue
+        full_d = os.path.join(WORKSPACE_DIR, d)
+        if not os.path.isdir(full_d):
+            continue
+        jp = os.path.join(full_d, "project.json")
+        mtime = os.path.getmtime(jp) if os.path.exists(jp) else os.path.getmtime(full_d)
+        proj_entries.append((mtime, d, full_d))
+
+    proj_entries.sort(reverse=True)
+    for _, pid, full_d in proj_entries[max_keep:]:
+        if pid == exclude_project_id:
+            continue
+        with PROJECTS_LOCK:
+            if PROJECTS.get(pid, {}).get("status") == "running":
+                continue
+            PROJECTS.pop(pid, None)
+        try:
+            for root, _, files in os.walk(full_d):
+                for fn in files:
+                    try:
+                        freed_bytes += os.path.getsize(os.path.join(root, fn))
+                    except Exception:
+                        pass
+            shutil.rmtree(full_d, ignore_errors=True)
+            removed_count += 1
+        except Exception:
+            continue
+
+    return {
+        "removed_projects": removed_count,
+        "freed_mb": round(freed_bytes / (1024 * 1024), 2),
+    }
+
+
+@app.post("/api/workspace/cleanup")
+def api_cleanup_workspace():
+    return _cleanup_old_projects(max_keep=5)
+
+
 @app.post("/api/projects/start")
 def api_start_project(req: StartPipelineRequest):
     if not req.name.strip():
         raise HTTPException(status_code=400, detail="Vui lòng nhập tên người nổi tiếng.")
 
     project_id = f"proj_{int(time.time())}_{uuid.uuid4().hex[:4]}"
+    _cleanup_old_projects(max_keep=5, exclude_project_id=project_id)
     pdir = _project_dir(project_id)
 
     celeb_info = lookup_celebrity(
@@ -778,17 +832,25 @@ def api_swap_year(project_id: str, req: SwapYearClipRequest):
                 _save_project_state(project_id)
                 return _serialize_project(PROJECTS[project_id])
 
-    # Action 2: Manual start_sec trim
-    if req.action == "custom_trim" and req.start_sec is not None and current_yc.get("url"):
+    # Action 2: Manual start_sec trim (with current URL or a custom URL)
+    target_url = (req.custom_url or "").strip() or current_yc.get("url")
+    if req.action == "custom_trim" and req.start_sec is not None and target_url:
         req_yr = int(current_yc.get("requested_year") or current_yc["year"])
         year_dir = os.path.join(pdir, f"year_{req_yr}")
-        vid = current_yc.get("video_id", "vid")
+        vid_match = re.search(r"(?:v=|youtu\.be/|shorts/)([A-Za-z0-9_-]{11})", target_url)
+        vid = vid_match.group(1) if vid_match else current_yc.get("video_id", "vid")
         raw_path = os.path.join(year_dir, f"raw_{vid}_manual_{int(req.start_sec)}.mp4")
-        if download_youtube_section(current_yc["url"], raw_path, start_sec=req.start_sec, duration_sec=clip_dur + 1.5, with_audio=False):
+        if download_youtube_section(target_url, raw_path, start_sec=req.start_sec, duration_sec=clip_dur + 1.5, with_audio=False):
             out_clip = os.path.join(year_dir, f"clip_{req.year}_{vid}_manual_{int(time.time())}.mp4")
             thumb_path = os.path.join(year_dir, f"thumb_{req.year}_{vid}_manual_{int(time.time())}.jpg")
             cut_video_clip(raw_path, out_clip, start_sec=0.0, duration_sec=clip_dur, keep_audio=False)
             extract_thumbnail(out_clip, thumb_path, time_sec=clip_dur * 0.4)
+            current_yc["video_id"] = vid
+            current_yc["url"] = target_url
+            if req.custom_url:
+                current_yc["title"] = f"Custom Video ({vid})"
+            if req.new_year_label is not None and 1930 <= int(req.new_year_label) <= 2035:
+                current_yc["year"] = int(req.new_year_label)
             current_yc["start_sec"] = round(req.start_sec, 2)
             current_yc["duration_sec"] = round(get_video_duration(out_clip) or clip_dur, 2)
             current_yc["clip_path"] = out_clip
@@ -796,14 +858,15 @@ def api_swap_year(project_id: str, req: SwapYearClipRequest):
             current_yc["status"] = "ready"
             with PROJECTS_LOCK:
                 PROJECTS[project_id]["year_clips"][target_idx] = current_yc
+                PROJECTS[project_id]["years"] = [int(x["year"]) for x in PROJECTS[project_id]["year_clips"]]
             _save_project_state(project_id)
             return _serialize_project(PROJECTS[project_id])
 
-    # Action 3: Swap to next YouTube video candidate or custom URL
+    # Action 3: Swap to next YouTube video candidate or custom URL (AI auto-locate face)
     next_cand_idx = 0 if req.custom_url else int(current_yc.get("candidate_index", 0)) + 1
     years_list = [int(x.get("requested_year") or x["year"]) for x in year_clips]
     win = _compute_year_window(years_list, target_idx)
-    req_yr = int(current_yc.get("requested_year") or req.year)
+    req_yr = int(req.new_year_label or current_yc.get("requested_year") or req.year)
     other_used_ids = {
         yc.get("video_id")
         for idx, yc in enumerate(year_clips)
@@ -831,10 +894,12 @@ def api_swap_year(project_id: str, req: SwapYearClipRequest):
         forbidden_years=other_used_years if sc_idx_val == 1 else None,
         scene_index=sc_idx_val,
     )
+    if req.new_year_label is not None and 1930 <= int(req.new_year_label) <= 2035:
+        new_yc["year"] = int(req.new_year_label)
     new_yc["status"] = "ready"
     with PROJECTS_LOCK:
         PROJECTS[project_id]["year_clips"][target_idx] = new_yc
-        PROJECTS[project_id]["years"][target_idx] = int(new_yc["year"])
+        PROJECTS[project_id]["years"] = [int(x["year"]) for x in PROJECTS[project_id]["year_clips"]]
     _save_project_state(project_id)
     return _serialize_project(PROJECTS[project_id])
 

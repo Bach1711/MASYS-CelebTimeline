@@ -1,5 +1,6 @@
 import os
 import re
+import glob
 import time
 import shutil
 import datetime
@@ -10,8 +11,42 @@ import numpy as np
 
 from face_engine import FaceEngine
 
-FFMPEG_BIN = shutil.which("ffmpeg") or r"C:\Users\My-PC\AppData\Local\Microsoft\WinGet\Links\ffmpeg.exe"
-FFPROBE_BIN = shutil.which("ffprobe") or r"C:\Users\My-PC\AppData\Local\Microsoft\WinGet\Links\ffprobe.exe"
+
+def _resolve_ffmpeg_bin(exe_name: str) -> str:
+    """
+    Dynamically locate ffmpeg/ffprobe across any Windows PC:
+    1. System PATH (`shutil.which`)
+    2. Local project folder (`./bin/` or `./`)
+    3. Current Windows user's WinGet Links (`%LOCALAPPDATA%\\Microsoft\\WinGet\\Links`)
+    4. Current Windows user's WinGet Packages (`%LOCALAPPDATA%\\Microsoft\\WinGet\\Packages\\*FFmpeg*`)
+    5. Standard install paths (`C:\\ffmpeg\\bin`, `C:\\Program Files\\ffmpeg\\bin`)
+    """
+    found = shutil.which(exe_name)
+    if found and os.path.exists(found):
+        return found
+
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(base_dir, "bin", f"{exe_name}.exe"),
+        os.path.join(base_dir, f"{exe_name}.exe"),
+        os.path.expandvars(rf"%LOCALAPPDATA%\Microsoft\WinGet\Links\{exe_name}.exe"),
+        rf"C:\ffmpeg\bin\{exe_name}.exe",
+        rf"C:\Program Files\ffmpeg\bin\{exe_name}.exe",
+    ]
+    for c in candidates:
+        if c and os.path.exists(c):
+            return c
+
+    winget_pkg_pattern = os.path.expandvars(rf"%LOCALAPPDATA%\Microsoft\WinGet\Packages\*FFmpeg*\**\bin\{exe_name}.exe")
+    matches = glob.glob(winget_pkg_pattern, recursive=True)
+    if matches:
+        return matches[0]
+
+    return exe_name
+
+
+FFMPEG_BIN = _resolve_ffmpeg_bin("ffmpeg")
+FFPROBE_BIN = _resolve_ffmpeg_bin("ffprobe")
 
 
 def get_video_duration(path: str) -> float:
