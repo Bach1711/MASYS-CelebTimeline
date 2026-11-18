@@ -97,6 +97,16 @@
               🚀 2. Tạo Video (Tìm & Cắt)
             </button>
             <button
+              id="btnStopPipeline"
+              type="button"
+              onclick="stopAllPipelines()"
+              disabled
+              class="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-bold shadow-sm transition cursor-pointer"
+              title="Dừng ngay lập tức mọi tiến trình tìm và cắt video đang chạy"
+            >
+              ⏹️ Dừng Chạy
+            </button>
+            <button
               id="btnRenderFinal"
               type="button"
               onclick="renderFinalVideo()"
@@ -1247,6 +1257,59 @@
       closeFolderPickerModal();
     }
 
+    function setRunningButtonsState(isRunning, countLabel = '') {
+      const btnStart = document.getElementById('btnStartPipeline');
+      const btnStop = document.getElementById('btnStopPipeline');
+      if (btnStart) {
+        btnStart.disabled = isRunning;
+        btnStart.innerText = isRunning
+          ? `⏳ Đang tìm & cắt${countLabel ? ' (' + countLabel + ')' : ''}...`
+          : '🚀 2. Tạo Video (Tìm & Cắt)';
+      }
+      if (btnStop) {
+        btnStop.disabled = !isRunning;
+      }
+    }
+
+    async function stopAllPipelines() {
+      const btnStop = document.getElementById('btnStopPipeline');
+      if (btnStop) {
+        btnStop.disabled = true;
+        btnStop.innerText = '⏳ Đang dừng...';
+      }
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+      if (batchPollTimer) {
+        clearInterval(batchPollTimer);
+        batchPollTimer = null;
+      }
+      try {
+        await fetch('/api/stop-all', { method: 'POST' });
+      } catch (e) {
+        console.error(e);
+      } finally {
+        if (btnStop) {
+          btnStop.innerText = '⏹️ Dừng Chạy';
+        }
+        setRunningButtonsState(false);
+      }
+      if (currentBatchId) {
+        try {
+          const bRes = await fetch(`/api/batch/${currentBatchId}`);
+          if (bRes.ok) {
+            currentBatch = await bRes.json();
+            renderBatchSwitcher(currentBatch);
+          }
+        } catch (_) {}
+      }
+      if (currentProjectId) {
+        await pollProjectStatus();
+      }
+      saveUiState();
+    }
+
     // --- Pipeline, Batch Mode & Storyboard ---
     async function startPipeline() {
       let filled = getFilledTableRows();
@@ -1264,8 +1327,6 @@
         filled = getFilledTableRows();
       }
 
-      const btnStart = document.getElementById('btnStartPipeline');
-      btnStart.disabled = true;
       wipeStoryboardDOM();
 
       const batchItemsPayload = filled.map(({ rowIdx, row }) => ({
@@ -1277,7 +1338,7 @@
         project_id: row.project_id || null
       }));
 
-      btnStart.innerText = `⏳ Đang tìm & cắt (${batchItemsPayload.length} người)...`;
+      setRunningButtonsState(true, `${batchItemsPayload.length} người`);
       try {
         if (pollTimer) {
           clearInterval(pollTimer);
@@ -1327,8 +1388,7 @@
         batchPollTimer = setInterval(pollBatchStatus, 2000);
       } catch (e) {
         alert('Lỗi tạo video: ' + e.message);
-        btnStart.disabled = false;
-        btnStart.innerText = '🚀 2. Tạo Video (Tìm & Cắt)';
+        setRunningButtonsState(false);
       }
     }
 
@@ -1362,9 +1422,7 @@
         if (b.status !== 'running') {
           clearInterval(batchPollTimer);
           batchPollTimer = null;
-          const btnStart = document.getElementById('btnStartPipeline');
-          btnStart.disabled = false;
-          btnStart.innerText = '🚀 2. Tạo Video (Tìm & Cắt)';
+          setRunningButtonsState(false);
         }
       } catch (e) {
         console.error(e);
@@ -1465,6 +1523,10 @@
           statusIcon = '⏳';
           metaBadge = `Đang cắt ${m.progress_pct || 5}%`;
           colorCls = 'bg-blue-50 text-blue-900 border-blue-300 hover:bg-blue-100';
+        } else if (m.status === 'stopped') {
+          statusIcon = '⏹️';
+          metaBadge = 'Đã dừng';
+          colorCls = 'bg-rose-50 text-rose-900 border-rose-300 hover:bg-rose-100';
         } else if (m.status === 'queued') {
           statusIcon = '🕒';
           metaBadge = `Chờ tới lượt`;
@@ -1574,9 +1636,7 @@
         if (proj.status !== 'running' && (!currentBatch || currentBatch.status !== 'running')) {
           clearInterval(pollTimer);
           pollTimer = null;
-          const btnStart = document.getElementById('btnStartPipeline');
-          btnStart.disabled = false;
-          btnStart.innerText = '🚀 2. Tạo Video (Tìm & Cắt)';
+          setRunningButtonsState(false);
           saveUiState();
         }
       } catch (e) {
@@ -1635,7 +1695,14 @@
         }
       }
       if (proj.years && proj.years.length) {
-        document.getElementById('yearsListInput').value = proj.years.join(', ');
+        const yrsJoined = proj.years.join(', ');
+        document.getElementById('yearsListInput').value = yrsJoined;
+        // Also sync discovered YouTube real years back to the corresponding row in the Table!
+        const matchRow = tableRowsData.find(r => r.project_id === proj.project_id);
+        if (matchRow && matchRow.years_str !== yrsJoined) {
+          matchRow.years_str = yrsJoined;
+          renderCelebTable();
+        }
       }
 
       const statusBadge = document.getElementById('statusBadge');
@@ -1650,11 +1717,17 @@
       const readyClips = readyNews + readyYears;
 
       if (proj.status === 'running') {
+        setRunningButtonsState(true);
         statusBadge.className = 'px-2.5 py-1 rounded-full bg-blue-100 text-blue-800 border border-blue-200 font-semibold';
         statusBadge.innerText = `⏳ Đang xử lý (${proj.progress_pct || 0}%)`;
         statusText.innerText = proj.progress_message || 'Đang tự động tìm video đúng mốc năm & lọc khuôn mặt AI...';
         progressBarWrap.classList.remove('hidden');
         progressBarFill.style.width = `${proj.progress_pct || 5}%`;
+      } else if (proj.status === 'stopped') {
+        progressBarWrap.classList.add('hidden');
+        statusBadge.className = 'px-2.5 py-1 rounded-full bg-rose-100 text-rose-800 border border-rose-300 font-semibold';
+        statusBadge.innerText = `⏹️ Đã dừng chạy (${readyClips}/${totalClips} đoạn)`;
+        statusText.innerHTML = 'Đã dừng theo yêu cầu của bạn. Các đoạn đã cắt xong vẫn được giữ nguyên (Bạn có thể bấm <strong>🚀 2. Tạo Video</strong> để chạy lại hoặc <strong>💾 3. Xuất Video</strong>).';
       } else if (proj.status === 'queued') {
         progressBarWrap.classList.add('hidden');
         statusBadge.className = 'px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-300 font-semibold';
@@ -2432,11 +2505,7 @@
               currentBatch = bData;
               renderBatchSwitcher(bData);
               if (bData.status === 'running') {
-                const btnStart = document.getElementById('btnStartPipeline');
-                if (btnStart) {
-                  btnStart.disabled = true;
-                  btnStart.innerText = `⏳ Đang tìm & cắt (${bData.total_count || 1} người)...`;
-                }
+                setRunningButtonsState(true, `${bData.total_count || 1} người`);
                 batchPollTimer = setInterval(pollBatchStatus, 2000);
               }
             }

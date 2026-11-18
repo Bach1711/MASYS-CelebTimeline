@@ -4,12 +4,34 @@ import glob
 import time
 import shutil
 import datetime
+import threading
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Any, Optional, Set, Tuple
 import yt_dlp
 import numpy as np
 
 from face_engine import FaceEngine
+
+PIPELINE_CANCEL_EVENT = threading.Event()
+
+
+def request_pipeline_cancel():
+    """Immediately signal all pipeline threads to stop and kill any active ffmpeg/yt-dlp child processes."""
+    PIPELINE_CANCEL_EVENT.set()
+    try:
+        subprocess.run(["taskkill", "/F", "/IM", "ffmpeg.exe", "/T"], capture_output=True, timeout=3)
+    except Exception:
+        pass
+
+
+def clear_pipeline_cancel():
+    """Reset the cancellation flag before starting a new pipeline run."""
+    PIPELINE_CANCEL_EVENT.clear()
+
+
+def is_pipeline_cancelled() -> bool:
+    return PIPELINE_CANCEL_EVENT.is_set()
 
 
 def _resolve_ffmpeg_bin(exe_name: str) -> str:
@@ -134,6 +156,8 @@ def extract_thumbnail(video_path: str, thumb_path: str, time_sec: float = 1.5) -
 
 def search_youtube(query: str, max_results: int = 8) -> List[Dict[str, Any]]:
     """Search YouTube via yt-dlp flat extraction for fast candidate discovery."""
+    if is_pipeline_cancelled():
+        return []
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
@@ -146,6 +170,8 @@ def search_youtube(query: str, max_results: int = 8) -> List[Dict[str, Any]]:
             info = ydl.extract_info(f"ytsearch{max_results}:{query}", download=False)
             entries = info.get("entries", []) if info else []
             for e in entries:
+                if is_pipeline_cancelled():
+                    break
                 if not e or not e.get("id"):
                     continue
                 vid = e["id"]
@@ -154,6 +180,11 @@ def search_youtube(query: str, max_results: int = 8) -> List[Dict[str, Any]]:
                     continue
                 thumbs = e.get("thumbnails") or []
                 thumb_url = thumbs[-1].get("url") if thumbs else f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
+                upload_yr = None
+                if e.get("release_year"):
+                    upload_yr = int(e["release_year"])
+                elif e.get("upload_date") and len(str(e["upload_date"])) >= 4:
+                    upload_yr = int(str(e["upload_date"])[:4])
                 results.append(
                     {
                         "video_id": vid,
@@ -163,11 +194,40 @@ def search_youtube(query: str, max_results: int = 8) -> List[Dict[str, Any]]:
                         "channel": e.get("uploader") or e.get("channel") or "",
                         "view_count": e.get("view_count") or 0,
                         "thumbnail": thumb_url,
+                        "upload_year": upload_yr,
                     }
                 )
     except Exception:
         pass
     return results
+
+
+def fetch_video_upload_year(video_id: str) -> Optional[int]:
+    """Quickly fetch the actual YouTube upload year of a video when its title has no explicit year."""
+    if is_pipeline_cancelled() or not video_id:
+        return None
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "playlist_items": "1",
+    }
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
+            if not info:
+                return None
+            if info.get("release_year"):
+                return int(info["release_year"])
+            up_date = str(info.get("upload_date") or "")
+            if len(up_date) >= 4 and up_date[:4].isdigit():
+                return int(up_date[:4])
+            ts = info.get("timestamp")
+            if ts:
+                return datetime.datetime.utcfromtimestamp(int(ts)).year
+    except Exception:
+        pass
+    return None
 
 
 def fetch_video_transcript(video_id: str) -> List[Dict[str, Any]]:
@@ -321,7 +381,11 @@ def download_youtube_section(
 ) -> bool:
     """
     Download a specific time section of a YouTube video quickly.
+    Aborts immediately if `is_pipeline_cancelled()` is True.
     """
+    if is_pipeline_cancelled():
+        raise RuntimeError("PIPELINE_CANCELLED")
+
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     url = (
         video_id_or_url
@@ -339,6 +403,10 @@ def download_youtube_section(
         else "bestvideo[height<=720][ext=mp4]/best[height<=720][ext=mp4]/best[height<=720]"
     )
 
+    def _cancel_hook(d):
+        if is_pipeline_cancelled():
+            raise RuntimeError("PIPELINE_CANCELLED")
+
     temp_base = output_path.replace(".mp4", "_temp")
     ydl_opts = {
         "format": fmt,
@@ -349,6 +417,7 @@ def download_youtube_section(
         "ffmpeg_location": os.path.dirname(FFMPEG_BIN),
         "download_ranges": yt_dlp.utils.download_range_func(None, [(start_sec, end_sec)]),
         "force_keyframes_at_cuts": True,
+        "progress_hooks": [_cancel_hook],
     }
 
     try:
@@ -364,8 +433,12 @@ def download_youtube_section(
                     cut_video_clip(cand, output_path, 0, duration_sec, keep_audio=with_audio)
                     os.remove(cand)
                 return True
-    except Exception:
-        pass
+    except Exception as e:
+        if "PIPELINE_CANCELLED" in str(e) or is_pipeline_cancelled():
+            raise RuntimeError("PIPELINE_CANCELLED")
+
+    if is_pipeline_cancelled():
+        raise RuntimeError("PIPELINE_CANCELLED")
 
     # Fallback: download without range if video is under 6 minutes, then trim with ffmpeg
     try:
@@ -376,6 +449,7 @@ def download_youtube_section(
             "no_warnings": True,
             "merge_output_format": "mp4",
             "ffmpeg_location": os.path.dirname(FFMPEG_BIN),
+            "progress_hooks": [_cancel_hook],
         }
         with yt_dlp.YoutubeDL(ydl_opts_full) as ydl:
             ydl.download([url])
@@ -388,8 +462,9 @@ def download_youtube_section(
                 except Exception:
                     pass
                 return ok
-    except Exception:
-        pass
+    except Exception as e:
+        if "PIPELINE_CANCELLED" in str(e) or is_pipeline_cancelled():
+            raise RuntimeError("PIPELINE_CANCELLED")
 
     return False
 
@@ -508,12 +583,34 @@ def _normalize_text(s: str) -> str:
     return re.sub(r"[’‘`]", "'", (s or "").lower())
 
 
+def _clean_person_name_for_search(celeb_name: str) -> str:
+    """Strip Wikipedia subpage suffixes like 'on stage and screen' or '(musician)' for clean YouTube queries."""
+    s = re.sub(r"\s*\([^)]*\)\s*", " ", celeb_name or "")
+    s = re.sub(
+        r"(?i)\s+(?:on stage and screen|filmography|discography|videography|career|in popular culture)\b.*$",
+        "",
+        s,
+    )
+    return re.sub(r"\s+", " ", s).strip()
+
+
 def _extract_years_from_title(title: str) -> List[int]:
     """Extract explicit 4-digit years (and 2-digit dates like 1/14/90) from a video title."""
     years = [int(y) for y in re.findall(r"\b(19[4-9]\d|20[0-2]\d)\b", title)]
     for m in re.findall(r"\b\d{1,2}/\d{1,2}/([6-9]\d)\b", title):
         years.append(1900 + int(m))
     return sorted(set(years))
+
+
+def _extract_decade_from_title(title: str) -> Optional[int]:
+    """Extract explicit decade tags like '1970s', '1980s', '70s', '80s', ''90s' from a video title."""
+    m4 = re.search(r"\b(19[5-9]0|20[0-2]0)s\b", title.lower())
+    if m4:
+        return int(m4.group(1))
+    m2 = re.search(r"(?:\b|')([6-9]0)s\b", title.lower())
+    if m2:
+        return 1900 + int(m2.group(1))
+    return None
 
 
 def _score_and_validate_year_candidate(
@@ -527,19 +624,24 @@ def _score_and_validate_year_candidate(
 ) -> Optional[Dict[str, Any]]:
     """
     Validate and score a YouTube candidate for a specific career milestone year.
-    Returns None if the candidate should be strictly rejected.
+    Strictly enforces True Year: never stamps a historical year (e.g. 1964, 1969) onto an undated video.
     """
     title_l = _normalize_text(item.get("title", ""))
     channel_l = _normalize_text(item.get("channel", ""))
     combined_l = f"{title_l} {channel_l}"
 
-    name_clean = _normalize_text(celeb_name)
+    clean_celeb = _clean_person_name_for_search(celeb_name)
+    name_clean = _normalize_text(clean_celeb)
     name_parts = [p for p in re.split(r"\s+", name_clean) if len(p) >= 2]
+    first_name = name_parts[0] if name_parts else name_clean
     last_name = name_parts[-1] if name_parts else name_clean
     last_name_no_apos = last_name.replace("'", "")
 
-    # 1. Must mention the celebrity's last name
-    if last_name not in combined_l and last_name_no_apos not in combined_l.replace("'", ""):
+    # 1. Must mention the celebrity's name in the video TITLE itself (not just channel name)
+    title_no_apos = title_l.replace("'", "")
+    if last_name not in title_l and last_name_no_apos not in title_no_apos:
+        return None
+    if len(name_parts) >= 2 and first_name not in title_l and first_name.replace("'", "") not in title_no_apos:
         return None
 
     # 2. Strictly reject multi-year compilation ranges like "1954-2026", "1983-2024", "2008-2025"
@@ -618,10 +720,12 @@ def _score_and_validate_year_candidate(
         if any(k in title_l for k in historical_forbidden):
             return None
 
-    # 4. Validate explicit years in the video title
+    # 4. Validate True Year of the video (Title year -> Upload year for modern clips -> Decade tag)
     min_yr, max_yr = year_window
     forbid_yrs = forbidden_years or set()
     title_years = _extract_years_from_title(title_l)
+    title_decade = _extract_decade_from_title(title_l)
+    upload_yr = int(item["upload_year"]) if item.get("upload_year") else None
 
     score = 0
     matched_year = None
@@ -635,18 +739,24 @@ def _score_and_validate_year_candidate(
         matched_year = min(valid_tys, key=lambda ty: abs(ty - target_year))
         diff = abs(matched_year - target_year)
         if diff == 0:
-            score += 25
+            score += 28
         elif diff == 1:
-            score += 18
+            score += 20
         else:
             score += 14
+    elif upload_yr and min_yr <= upload_yr <= max_yr and upload_yr not in forbid_yrs and upload_yr >= 2008:
+        has_explicit_year = True
+        matched_year = upload_yr
+        score += 18
+    elif title_decade and (title_decade <= target_year <= title_decade + 9) and target_year not in forbid_yrs:
+        has_explicit_year = True
+        matched_year = target_year
+        score += 12
     else:
-        if target_year in forbid_yrs:
+        # CRITICAL RULE: Never stamp a historical year (e.g. 1964, 1969, 1985) onto a video that has NO year!
+        if target_year < current_year - 2 or target_year in forbid_yrs:
             return None
-        if target_year < current_year - 2:
-            score -= 12
-        else:
-            score += 4
+        score += 4
 
     if name_clean in title_l or name_clean.replace("'", "") in title_l.replace("'", ""):
         score += 6
@@ -666,6 +776,157 @@ def _score_and_validate_year_candidate(
     return cand
 
 
+def discover_celebrity_youtube_pool(
+    celeb_name: str,
+    birth_year: int,
+    death_year: int,
+    requested_years: List[int],
+    extra_forbidden_terms: Optional[List[str]] = None,
+) -> Tuple[List[int], Dict[int, List[Dict[str, Any]]]]:
+    """
+    YouTube-First Year Discovery:
+    1. Scans YouTube across the celebrity's career and decades to discover which years ACTUALLY have valid videos.
+    2. For lesser-known celebrities with undated videos, fetches the true YouTube `upload_year` so modern clips
+       are placed at their true upload year (e.g. 2016, 2020) and NEVER mislabeled as 1964 or 1969.
+    3. Adapts the timeline years to match the real available video years on YouTube.
+    """
+    if is_pipeline_cancelled():
+        raise RuntimeError("PIPELINE_CANCELLED")
+
+    clean_celeb = _clean_person_name_for_search(celeb_name)
+    current_year = datetime.datetime.now().year
+    min_career_yr = max(1950, (birth_year or 1950) + 16)
+    max_career_yr = min(current_year, death_year or current_year)
+
+    queries = [
+        f"{clean_celeb} interview",
+        f"{clean_celeb} live talk show",
+        f"{clean_celeb} clip scene",
+    ]
+    start_dec = (min_career_yr // 10) * 10
+    end_dec = (max_career_yr // 10) * 10
+    for dec in range(start_dec, end_dec + 1, 10):
+        queries.append(f"{clean_celeb} {dec}s interview")
+    # Also include a few of the requested years directly so specific milestone hits are included
+    for ry in requested_years[::2]:
+        queries.append(f"{clean_celeb} {ry}")
+
+    raw_items: List[Dict[str, Any]] = []
+    seen_vids: Set[str] = set()
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        future_map = {pool.submit(search_youtube, q, 10): q for q in queries[:12]}
+        for fut in as_completed(future_map):
+            if is_pipeline_cancelled():
+                raise RuntimeError("PIPELINE_CANCELLED")
+            try:
+                items = fut.result() or []
+                for it in items:
+                    vid = it.get("video_id")
+                    if vid and vid not in seen_vids:
+                        seen_vids.add(vid)
+                        raw_items.append(it)
+            except Exception:
+                continue
+
+    dated_by_year: Dict[int, List[Dict[str, Any]]] = {}
+    undated_items: List[Dict[str, Any]] = []
+
+    for item in raw_items:
+        title_l = _normalize_text(item.get("title", ""))
+        tys = [y for y in _extract_years_from_title(title_l) if min_career_yr <= y <= max_career_yr]
+        if tys:
+            yr = tys[0]
+            scored = _score_and_validate_year_candidate(
+                item,
+                celeb_name=clean_celeb,
+                target_year=yr,
+                year_window=(yr, yr),
+                current_year=current_year,
+                extra_forbidden_terms=extra_forbidden_terms,
+            )
+            if scored:
+                dated_by_year.setdefault(yr, []).append(scored)
+        else:
+            dec = _extract_decade_from_title(title_l)
+            if dec and min_career_yr <= dec + 5 <= max_career_yr:
+                yr = min(max_career_yr, max(min_career_yr, dec + 5))
+                scored = _score_and_validate_year_candidate(
+                    item,
+                    celeb_name=clean_celeb,
+                    target_year=yr,
+                    year_window=(dec, dec + 9),
+                    current_year=current_year,
+                    extra_forbidden_terms=extra_forbidden_terms,
+                )
+                if scored:
+                    dated_by_year.setdefault(yr, []).append(scored)
+            else:
+                # Check if title passes basic celebrity name & forbidden word filter before probing upload_year
+                probe = _score_and_validate_year_candidate(
+                    item,
+                    celeb_name=clean_celeb,
+                    target_year=current_year,
+                    year_window=(current_year - 2, current_year),
+                    current_year=current_year,
+                    extra_forbidden_terms=extra_forbidden_terms,
+                )
+                if probe:
+                    undated_items.append(item)
+
+    # If celebrity has fewer than 9 dated years on YouTube (e.g. minor/niche celebrity like John Leeson),
+    # fetch true YouTube upload_year for top undated videos so they get their REAL year (e.g. 2016, 2019, 2022)!
+    if len(dated_by_year) < 9 and undated_items:
+        top_undated = undated_items[:10]
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            fut_to_item = {pool.submit(fetch_video_upload_year, it["video_id"]): it for it in top_undated}
+            for fut in as_completed(fut_to_item):
+                if is_pipeline_cancelled():
+                    raise RuntimeError("PIPELINE_CANCELLED")
+                it = fut_to_item[fut]
+                try:
+                    up_yr = fut.result()
+                except Exception:
+                    up_yr = None
+                if up_yr and min_career_yr <= up_yr <= max_career_yr:
+                    it_copy = dict(it)
+                    it_copy["upload_year"] = up_yr
+                    scored = _score_and_validate_year_candidate(
+                        it_copy,
+                        celeb_name=clean_celeb,
+                        target_year=up_yr,
+                        year_window=(up_yr, up_yr),
+                        current_year=current_year,
+                        extra_forbidden_terms=extra_forbidden_terms,
+                    )
+                    if scored:
+                        dated_by_year.setdefault(up_yr, []).append(scored)
+
+    for yr in list(dated_by_year.keys()):
+        dated_by_year[yr].sort(key=lambda x: x.get("relevance", 0), reverse=True)
+
+    available_years = sorted(dated_by_year.keys())
+    target_cnt = len(requested_years) if requested_years else 10
+
+    if not available_years:
+        return requested_years, dated_by_year
+
+    # If celebrity has fewer or equal real years on YouTube than target_cnt, use ALL real available years!
+    if len(available_years) <= target_cnt:
+        return available_years, dated_by_year
+
+    # Otherwise, snap requested_years to the closest real available years in dated_by_year
+    chosen: List[int] = []
+    for req_y in requested_years:
+        rem = [ay for ay in available_years if ay not in chosen]
+        if not rem:
+            break
+        closest = min(rem, key=lambda ay: abs(ay - req_y))
+        chosen.append(closest)
+
+    return sorted(set(chosen)), dated_by_year
+
+
 def find_and_prepare_year_clip(
     celeb_name: str,
     year: int,
@@ -682,6 +943,7 @@ def find_and_prepare_year_clip(
     used_video_ids: Optional[Set[str]] = None,
     forbidden_years: Optional[Set[int]] = None,
     extra_forbidden_terms: Optional[List[str]] = None,
+    pre_discovered_candidates: Optional[List[Dict[str, Any]]] = None,
     scene_index: int = 1,
 ) -> Dict[str, Any]:
     """
@@ -689,6 +951,10 @@ def find_and_prepare_year_clip(
     actually belong to that year/era, download active sections, and verify via FaceEngine
     that the main celebrity is clearly on screen with live motion and no text overlays.
     """
+    if is_pipeline_cancelled():
+        raise RuntimeError("PIPELINE_CANCELLED")
+
+    clean_celeb = _clean_person_name_for_search(celeb_name)
     current_year = datetime.datetime.now().year
     win = year_window or (year - 2, min(current_year, year + 2))
     used_ids = used_video_ids or set()
@@ -714,47 +980,55 @@ def find_and_prepare_year_clip(
             }
         )
     else:
-        primary_queries = [
-            f"{celeb_name} {year} interview",
-            f"{celeb_name} {year} live",
-            f"{celeb_name} {year}",
-        ]
-        if year >= current_year:
-            primary_queries.append(f"{celeb_name} {year - 1} interview")
-            primary_queries.append(f"{celeb_name} {year - 1} speech")
-
         seen: Set[str] = set()
+        for pc in (pre_discovered_candidates or []):
+            vid = pc.get("video_id")
+            if vid and vid not in seen and vid not in used_ids:
+                seen.add(vid)
+                candidates.append(dict(pc))
 
-        def _collect_from_queries(q_list: List[str]):
-            for q in q_list:
-                for item in search_youtube(q, max_results=7):
-                    vid = item["video_id"]
-                    if vid in seen or vid in used_ids:
-                        continue
-                    seen.add(vid)
-                    scored = _score_and_validate_year_candidate(
-                        item,
-                        celeb_name=celeb_name,
-                        target_year=year,
-                        year_window=win,
-                        current_year=current_year,
-                        forbidden_years=forbid_yrs,
-                        extra_forbidden_terms=extra_forbidden_terms,
-                    )
-                    if scored is not None:
-                        candidates.append(scored)
+        if len(candidates) < 3:
+            primary_queries = [
+                f"{clean_celeb} {year} interview",
+                f"{clean_celeb} {year} live",
+                f"{clean_celeb} {year}",
+            ]
+            if year >= current_year:
+                primary_queries.append(f"{clean_celeb} {year - 1} interview")
+                primary_queries.append(f"{clean_celeb} {year - 1} speech")
 
-        _collect_from_queries(primary_queries)
+            def _collect_from_queries(q_list: List[str]):
+                for q in q_list:
+                    if is_pipeline_cancelled():
+                        raise RuntimeError("PIPELINE_CANCELLED")
+                    for item in search_youtube(q, max_results=7):
+                        vid = item["video_id"]
+                        if vid in seen or vid in used_ids:
+                            continue
+                        seen.add(vid)
+                        scored = _score_and_validate_year_candidate(
+                            item,
+                            celeb_name=clean_celeb,
+                            target_year=year,
+                            year_window=win,
+                            current_year=current_year,
+                            forbidden_years=forbid_yrs,
+                            extra_forbidden_terms=extra_forbidden_terms,
+                        )
+                        if scored is not None:
+                            candidates.append(scored)
 
-        explicit_count = sum(1 for c in candidates if c.get("has_explicit_year"))
-        if explicit_count < 2:
-            adj_queries = []
-            for delta in [-1, 1, -2, 2]:
-                adj_y = year + delta
-                if win[0] <= adj_y <= win[1] and adj_y not in forbid_yrs:
-                    adj_queries.append(f"{celeb_name} {adj_y} interview")
-                    adj_queries.append(f"{celeb_name} {adj_y}")
-            _collect_from_queries(adj_queries[:4])
+            _collect_from_queries(primary_queries)
+
+            explicit_count = sum(1 for c in candidates if c.get("has_explicit_year"))
+            if explicit_count < 2:
+                adj_queries = []
+                for delta in [-1, 1, -2, 2]:
+                    adj_y = year + delta
+                    if win[0] <= adj_y <= win[1] and adj_y not in forbid_yrs:
+                        adj_queries.append(f"{clean_celeb} {adj_y} interview")
+                        adj_queries.append(f"{clean_celeb} {adj_y}")
+                _collect_from_queries(adj_queries[:4])
 
         explicit_cands = [c for c in candidates if c.get("has_explicit_year")]
         if explicit_cands and year < current_year - 1:
@@ -772,6 +1046,8 @@ def find_and_prepare_year_clip(
     best_fallback_score = -1.0
 
     for cand in ordered[:5]:
+        if is_pipeline_cancelled():
+            raise RuntimeError("PIPELINE_CANCELLED")
         vid = cand["video_id"]
         vid_dur = float(cand.get("duration") or 90.0)
 

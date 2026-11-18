@@ -55,11 +55,30 @@ def _score_wikipedia_human_candidate(
     combined = f"{d_low} {e_low}"
     q_low = (query_name or "").strip().lower()
 
-    # Strictly reject disambiguation pages, lists, death-of articles, bands/companies/restaurants/films/albums
-    if t_low.startswith("list of ") or t_low.startswith("death of ") or "in popular culture" in t_low:
+    # Strictly reject disambiguation pages, lists, death-of articles, stage-and-screen/filmography subpages, bands/companies/films/albums
+    reject_title_patterns = [
+        "disambiguation",
+        "list of ",
+        "death of ",
+        "in popular culture",
+        "on stage and screen",
+        "filmography",
+        "discography",
+        "videography",
+        "bibliography",
+        "awards and nominations",
+        "career of ",
+        "personal life of ",
+        " (film)",
+        " (album)",
+        " (song)",
+        " (band)",
+        " (tv series)",
+    ]
+    if any(pat in t_low for pat in reject_title_patterns):
         return -500.0
 
-    hard_reject_phrases = [
+    hard_reject_desc = [
         "may refer to",
         "disambiguation",
         "restaurant chain",
@@ -69,7 +88,6 @@ def _score_wikipedia_human_candidate(
         "company",
         "son of a ruler",
         "title of nobility",
-        "monarch",
         "studio album",
         "discography",
         "filmography",
@@ -77,7 +95,9 @@ def _score_wikipedia_human_candidate(
         "video game",
         "fictional character",
     ]
-    if any(p in combined for p in hard_reject_phrases):
+    if any(p in d_low for p in hard_reject_desc):
+        return -500.0
+    if any(p in e_low[:180] for p in ["may refer to", "restaurant chain", "fast food", "son of a ruler", "title of nobility"]):
         return -500.0
 
     score = max(0.0, 20.0 - rank_idx * 2.0)
@@ -114,7 +134,7 @@ def _score_wikipedia_human_candidate(
 
     clean_title = re.sub(r"\s*\([^)]*\)\s*$", "", t_low).strip()
     if clean_title == q_low:
-        score += 75.0
+        score += 140.0
     elif q_low in clean_title:
         score += 20.0
 

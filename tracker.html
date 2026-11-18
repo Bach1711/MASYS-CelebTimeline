@@ -242,6 +242,21 @@
           "Loại bỏ hoặc phạt nặng các đoạn có chữ đè, phụ đề dịch hoặc banner chữ chạy ngang màn hình.",
           "Đảm bảo khuôn mặt nhân vật chính xuất hiện xuyên suốt đoạn clip 4–5s (match_ratio >= 78%, khung đầu-giữa-cuối đều có mặt nhân vật, khắc phục lỗi năm 1984)."
         ]
+      },
+      {
+        id: "CON-212",
+        url: "https://linear.app/conducdaudan/issue/CON-212/youtube-driven-timeline-and-stop-button-tu-djong-do-nam-co-video-that",
+        title: "[YouTube-Driven Timeline & Stop Button] Tự động dò năm có video thật trên YouTube, cấm gắn sai năm & Nút Dừng Chạy tức thì",
+        priority: "Urgent",
+        status: "Done",
+        module: "youtube_pipeline.py, celeb_service.py, app.py, static/index.html",
+        description: "Đảo chiều quy trình chọn mốc năm theo tư liệu thực tế trên YouTube (discover_celebrity_youtube_pool): tự động dò các năm thực sự có video của nhân vật, đọc upload_year thực tế cho các video không ghi năm trên tiêu đề (cấm tuyệt đối gắn năm quá khứ 1964/1969 lên video hiện đại như lỗi John Leeson), chặn trang phụ Wikipedia (on stage and screen), và bổ sung nút ⏹️ Dừng Chạy ngắt tức thì mọi tiến trình tìm & cắt video.",
+        dod: [
+          "Cấm tuyệt đối việc lấy video không ghi năm trên tiêu đề rồi gắn vào các mốc năm quá khứ (1950–2013); tự động lấy upload_year thực tế trên YouTube cho các video phỏng vấn đời mới (Fix lỗi John Leeson).",
+          "Tự động quét và điều chỉnh dãy mốc năm theo những năm thực sự có video của nhân vật trên YouTube, loại bỏ các ô lỗi trống (Fix lỗi Patrick Stewart).",
+          "Chặn các trang phụ Wikipedia có đuôi 'on stage and screen', 'disambiguation', 'filmography', 'discography'.",
+          "Nút ⏹️ Dừng Chạy dừng ngay lập tức mọi tiến trình tìm & cắt video đang chạy (hủy luôn các tiến trình con yt-dlp / ffmpeg) và giữ nguyên các cảnh đã cắt xong."
+        ]
       }
     ];
 

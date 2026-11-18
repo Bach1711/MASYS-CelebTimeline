@@ -1,6 +1,6 @@
 {
-  "sha": "633a3135c57c96d03727173f20a6e9b8b4b1dac1",
-  "short_sha": "633a313",
-  "date": "2026-11-18 16:46:47 +0700",
-  "message": "fix(CON-210): fix batch scan button, persist full UI/table/video state across F5, and support in-place row deletion/replacement with live tab sync"
+  "sha": "41584c80740954a17bdbf1762ff10ffc3a9735c6",
+  "short_sha": "41584c8",
+  "date": "2026-11-18 17:24:23 +0700",
+  "message": "feat(CON-212): YouTube-first true-year timeline discovery, strict anti-wrong-year filter, Wikipedia subpage blocker, and instant Stop button"
 }
