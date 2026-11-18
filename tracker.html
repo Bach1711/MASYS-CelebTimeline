@@ -60,7 +60,7 @@
           <span id="statTodo" class="px-3 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-300">Todo: 0</span>
           <span id="statInProgress" class="px-3 py-1 rounded-full bg-blue-100 text-blue-800 border border-blue-200">In Progress: 0</span>
           <span id="statReview" class="px-3 py-1 rounded-full bg-amber-100 text-amber-800 border border-amber-200">Review: 0</span>
-          <span id="statDone" class="px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">Done: 5</span>
+          <span id="statDone" class="px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">Done: 6</span>
         </div>
       </div>
 
@@ -68,7 +68,7 @@
         <div id="overallProgressBar" class="bg-emerald-500 h-full transition-all duration-300" style="width: 100%"></div>
       </div>
       <div class="flex justify-between text-xs text-slate-600 font-semibold">
-        <span id="overallProgressLabel">Hoàn thành: 100% (5/5 Tickets)</span>
+        <span id="overallProgressLabel">Hoàn thành: 100% (6/6 Tickets)</span>
         <span>Chuẩn nghiệm thu: Khung dọc 9:16 (1080×1920) • Giữ tiếng bản tin đầu • Tắt tiếng các năm</span>
       </div>
     </div>
@@ -170,6 +170,20 @@
           "Bảng lưới Storyboard 4 cột hiển thị trực tiếp <video> cho ô Bản tin mở đầu (có tiếng) và các ô Năm (autoplay loop muted, nhãn năm vàng viền đen, % AI).",
           "Các nút 🔄 Đổi bản tin, ✂️ Chỉnh giây, ✨ Đổi cảnh, 🔄 Đổi video hoạt động thực tế với Backend API.",
           "Đã loại bỏ hoàn toàn phần chọn/tải nhạc nền khỏi giao diện."
+        ]
+      },
+      {
+        id: "CON-207",
+        url: "https://linear.app/conducdaudan/issue/CON-207/updater-he-thong-kiem-tra-and-cap-nhat-tu-djong-1-cham-giua-cac-may",
+        title: "[Updater] Hệ thống Kiểm tra & Cập nhật Tự động 1 chạm giữa các máy (Check Update & 1-Click Update)",
+        priority: "Urgent",
+        status: "Done",
+        module: "app.py, static/index.html, publish_update.bat",
+        description: "Hệ thống Kiểm tra Update và Cập nhật 1 chạm từ GitHub (Bach1711/MASYS-CelebTimeline): hỗ trợ cả máy có Git lẫn máy khách copy qua USB/ZIP không cài Git, tự động bảo toàn dữ liệu workspace/ và tự khởi động lại ứng dụng.",
+        dod: [
+          "Nút 🔄 Kiểm tra Update trên thanh công cụ kiểm tra chính xác phiên bản hiện tại so với GitHub Bach1711/MASYS-CelebTimeline và hiển thị danh sách thay đổi mới.",
+          "Nút ⬇️ Cập nhật ngay cập nhật thành công toàn bộ mã nguồn (Dual-Engine: Git hoặc GitHub ZIP), giữ nguyên dữ liệu workspace/ và tự khởi động lại ứng dụng.",
+          "Hỗ trợ đẩy nhanh code mới lên GitHub từ máy Dev (nút 📤 Đẩy lên GitHub hoặc publish_update.bat) để các máy khác nhận bản cập nhật ngay."
         ]
       }
     ];

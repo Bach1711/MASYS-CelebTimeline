@@ -29,7 +29,26 @@
             MASYS
           </span>
           <div>
-            <h1 class="font-bold text-lg text-slate-900 leading-tight">MASYS CelebTimeline</h1>
+            <div class="flex items-center gap-2 flex-wrap">
+              <h1 class="font-bold text-lg text-slate-900 leading-tight">MASYS CelebTimeline</h1>
+              <span
+                id="versionBadge"
+                class="px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 border border-slate-200 font-mono text-[11px] font-semibold"
+                title="Phiên bản mã nguồn hiện tại trên máy"
+              >
+                #...
+              </span>
+              <button
+                id="btnOpenUpdateModal"
+                type="button"
+                onclick="openUpdateModal()"
+                class="relative px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 text-xs font-bold transition cursor-pointer flex items-center gap-1"
+                title="Kiểm tra và cập nhật phiên bản mới nhất từ GitHub"
+              >
+                <span>🔄 Kiểm tra Update</span>
+                <span id="updateNotifyDot" class="hidden w-2 h-2 rounded-full bg-rose-500 animate-ping"></span>
+              </button>
+            </div>
             <p class="text-xs text-slate-500">Chuẩn khung dọc 9:16 TikTok • Giữ tiếng bản tin đầu • Tắt tiếng các năm</p>
           </div>
         </div>
@@ -310,6 +329,107 @@
         </div>
         <div class="bg-black rounded-xl overflow-hidden flex items-center justify-center" style="aspect-ratio: 9/16; max-height: 70vh; margin: 0 auto;">
           <video id="finalVideoPlayer" controls class="w-full h-full object-contain"></video>
+        </div>
+      </div>
+    </div>
+
+    <!-- 1-Click Auto-Update Modal -->
+    <div
+      id="updateModal"
+      class="hidden fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4"
+    >
+      <div class="bg-white border border-slate-200 rounded-2xl p-5 max-w-lg w-full shadow-2xl space-y-4">
+        <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+          <div>
+            <h3 class="font-bold text-base text-slate-900">🔄 Kiểm Tra & Cập Nhật Ứng Dụng (Auto-Update)</h3>
+            <p class="text-xs text-slate-500">Đồng bộ trực tiếp từ kho mã nguồn <code class="font-mono text-slate-700">Bach1711/MASYS-CelebTimeline</code></p>
+          </div>
+          <button
+            type="button"
+            onclick="closeUpdateModal()"
+            class="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer"
+          >
+            ✕ Đóng
+          </button>
+        </div>
+
+        <!-- Current vs Remote Version Info -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+          <div class="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-1">
+            <div class="text-slate-500 font-semibold">💻 Phiên bản trên máy này</div>
+            <div class="flex items-center gap-2">
+              <span id="updLocalSha" class="px-2 py-0.5 rounded bg-slate-900 text-amber-400 font-mono font-bold text-xs">#...</span>
+              <span id="updLocalDate" class="text-[11px] text-slate-500"></span>
+            </div>
+            <div id="updLocalMsg" class="text-slate-700 font-medium line-clamp-2">Đang đọc...</div>
+          </div>
+
+          <div class="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-1">
+            <div class="text-slate-500 font-semibold">☁️ Phiên bản mới nhất (GitHub)</div>
+            <div class="flex items-center gap-2">
+              <span id="updRemoteSha" class="px-2 py-0.5 rounded bg-indigo-600 text-white font-mono font-bold text-xs">#...</span>
+              <span id="updRemoteDate" class="text-[11px] text-slate-500"></span>
+            </div>
+            <div id="updRemoteMsg" class="text-slate-700 font-medium line-clamp-2">Đang kiểm tra...</div>
+          </div>
+        </div>
+
+        <!-- Dynamic Update Status Box -->
+        <div id="updStatusBox" class="rounded-xl p-3.5 border text-xs space-y-2 bg-slate-50 border-slate-200 text-slate-700">
+          ⏳ Đang kiểm tra bản cập nhật mới từ GitHub...
+        </div>
+
+        <!-- Changelog List (shown when update is available) -->
+        <div id="updChangelogWrap" class="hidden space-y-1.5">
+          <div class="text-xs font-bold text-slate-800">📋 Nội dung thay đổi trong bản cập nhật mới:</div>
+          <div id="updChangelogList" class="max-h-36 overflow-y-auto bg-slate-50 border border-slate-200 rounded-xl p-2.5 space-y-1.5 text-xs"></div>
+        </div>
+
+        <!-- Primary Client Action Buttons: Check Again & Apply Update -->
+        <div class="flex items-center justify-between gap-2 pt-1">
+          <button
+            id="btnRecheckUpdate"
+            type="button"
+            onclick="checkForUpdates()"
+            class="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 text-xs font-bold cursor-pointer transition"
+          >
+            🔍 Kiểm tra lại
+          </button>
+          <button
+            id="btnApplyUpdate"
+            type="button"
+            onclick="applyOneClickUpdate()"
+            class="hidden px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md cursor-pointer transition"
+          >
+            ⬇️ Cập nhật ngay (Tự động tải & Khởi động lại)
+          </button>
+        </div>
+
+        <!-- Developer Publish Section (Only visible on Dev PC with .git when local changes/unpushed commits exist) -->
+        <div id="devPublishSection" class="hidden pt-3 border-t border-slate-200 space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold text-indigo-900">🛠️ Dành cho Máy Chủ Dev: Đẩy code mới lên GitHub</span>
+            <span id="devUnpushedBadge" class="px-2 py-0.5 rounded bg-amber-100 text-amber-900 font-semibold text-[11px]"></span>
+          </div>
+          <p class="text-[11px] text-slate-500">
+            Sau khi bạn sửa code trên máy này, bấm nút bên dưới để đẩy lên GitHub. Các máy khác chỉ cần bấm <strong>Kiểm tra Update ➔ Cập nhật ngay</strong> là nhận được ngay.
+          </p>
+          <div class="flex gap-2">
+            <input
+              id="devPublishMsg"
+              type="text"
+              placeholder="Ghi chú bản cập nhật (ví dụ: Tối ưu cắt video năm)..."
+              class="flex-1 px-3 py-1.5 rounded-lg border border-slate-300 text-xs bg-slate-50 focus:bg-white focus:outline-none focus:border-indigo-500"
+            />
+            <button
+              id="btnPublishUpdate"
+              type="button"
+              onclick="publishDevUpdate()"
+              class="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shrink-0 cursor-pointer transition"
+            >
+              📤 Đẩy lên GitHub
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -1061,8 +1181,219 @@
         'Các mốc năm & thời lượng đã được tính tự động theo tiểu sử nhân vật (~1 phút). Bấm <strong>🚀 1. Tạo Video (Tìm & Cắt)</strong> để bắt đầu.';
     }
 
+    // --- 1-Click Auto-Update System ---
+    async function loadVersionBadge() {
+      try {
+        const res = await fetch('/api/update/version');
+        if (!res.ok) return;
+        const info = await res.json();
+        const badge = document.getElementById('versionBadge');
+        if (badge && info.short_sha) {
+          badge.innerText = `#${info.short_sha}`;
+          badge.title = `Phiên bản hiện tại: #${info.short_sha} — ${info.message || ''}`;
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function openUpdateModal() {
+      document.getElementById('updateModal').classList.remove('hidden');
+      await checkForUpdates();
+    }
+
+    function closeUpdateModal() {
+      document.getElementById('updateModal').classList.add('hidden');
+    }
+
+    async function checkForUpdates() {
+      const statusBox = document.getElementById('updStatusBox');
+      const btnApply = document.getElementById('btnApplyUpdate');
+      const btnRecheck = document.getElementById('btnRecheckUpdate');
+      const changelogWrap = document.getElementById('updChangelogWrap');
+      const changelogList = document.getElementById('updChangelogList');
+      const devSection = document.getElementById('devPublishSection');
+      const notifyDot = document.getElementById('updateNotifyDot');
+
+      statusBox.className = 'rounded-xl p-3.5 border text-xs space-y-1 bg-slate-50 border-slate-200 text-slate-700';
+      statusBox.innerHTML = '⏳ Đang kết nối tới GitHub để kiểm tra bản cập nhật mới nhất...';
+      btnApply.classList.add('hidden');
+      changelogWrap.classList.add('hidden');
+      if (btnRecheck) btnRecheck.disabled = true;
+
+      try {
+        const res = await fetch('/api/update/check');
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.detail || 'Không thể kiểm tra cập nhật');
+        }
+
+        const loc = data.local || {};
+        const rem = data.remote || {};
+
+        document.getElementById('updLocalSha').innerText = `#${loc.short_sha || 'unknown'}`;
+        document.getElementById('updLocalDate').innerText = (loc.date || '').slice(0, 16);
+        document.getElementById('updLocalMsg').innerText = loc.message || 'Bản cài đặt cục bộ';
+
+        document.getElementById('updRemoteSha').innerText = `#${rem.short_sha || 'unknown'}`;
+        document.getElementById('updRemoteDate').innerText = (rem.date || '').replace('T', ' ').slice(0, 16);
+        document.getElementById('updRemoteMsg').innerText = rem.message || '';
+
+        const badge = document.getElementById('versionBadge');
+        if (badge && loc.short_sha) {
+          badge.innerText = `#${loc.short_sha}`;
+        }
+
+        if (data.has_update) {
+          if (notifyDot) notifyDot.classList.remove('hidden');
+          statusBox.className = 'rounded-xl p-3.5 border text-xs space-y-1 bg-amber-50 border-amber-300 text-amber-950';
+          statusBox.innerHTML = `
+            <div class="font-bold text-sm text-amber-900">🚀 Đã có bản cập nhật mới (#${rem.short_sha})!</div>
+            <div>Bấm nút <strong>"⬇️ Cập nhật ngay"</strong> bên dưới để tự động tải code mới và khởi động lại ứng dụng (Dữ liệu dự án & video của bạn được giữ nguyên 100%).</div>
+          `;
+          btnApply.classList.remove('hidden');
+
+          const commits = rem.commits || [];
+          if (commits.length) {
+            changelogWrap.classList.remove('hidden');
+            changelogList.innerHTML = commits.map(c => `
+              <div class="flex items-start gap-2">
+                <span class="px-1.5 py-0.5 rounded bg-slate-200 text-slate-800 font-mono font-bold text-[10px] shrink-0">#${c.sha}</span>
+                <span class="text-slate-700 font-medium">${c.message}</span>
+              </div>
+            `).join('');
+          }
+        } else if (data.is_ahead_of_remote) {
+          if (notifyDot) notifyDot.classList.add('hidden');
+          statusBox.className = 'rounded-xl p-3.5 border text-xs space-y-1 bg-indigo-50 border-indigo-200 text-indigo-900';
+          statusBox.innerHTML = `
+            <div class="font-bold">✨ Máy chủ Dev của bạn đang có bản code mới hơn trên GitHub!</div>
+            <div>Hãy bấm <strong>"📤 Đẩy lên GitHub"</strong> ở khung bên dưới để phát hành bản cập nhật này cho các máy khác.</div>
+          `;
+        } else {
+          if (notifyDot) notifyDot.classList.add('hidden');
+          statusBox.className = 'rounded-xl p-3.5 border text-xs space-y-1 bg-emerald-50 border-emerald-200 text-emerald-900';
+          statusBox.innerHTML = `
+            <div class="font-bold">✅ Bạn đang sử dụng phiên bản mới nhất (#${loc.short_sha})!</div>
+            <div>Mọi tính năng và bộ lọc khuôn mặt AI đã được đồng bộ với bản mới nhất trên GitHub.</div>
+          `;
+        }
+
+        // Show Developer Publish section if this machine has .git
+        if (loc.has_git) {
+          devSection.classList.remove('hidden');
+          const unpushed = Number(loc.unpushed_count || 0);
+          const hasDirty = Boolean(loc.has_local_changes);
+          const devBadge = document.getElementById('devUnpushedBadge');
+          if (hasDirty || unpushed > 0) {
+            devBadge.innerText = hasDirty ? 'Có thay đổi chưa đẩy lên GitHub' : `${unpushed} commit chờ đẩy lên GitHub`;
+            devBadge.className = 'px-2 py-0.5 rounded bg-amber-100 text-amber-900 font-semibold text-[11px]';
+          } else {
+            devBadge.innerText = 'Đã đồng bộ GitHub';
+            devBadge.className = 'px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-semibold text-[11px]';
+          }
+        } else {
+          devSection.classList.add('hidden');
+        }
+      } catch (e) {
+        statusBox.className = 'rounded-xl p-3.5 border text-xs space-y-1 bg-rose-50 border-rose-200 text-rose-800';
+        statusBox.innerText = '⚠️ Lỗi kiểm tra cập nhật: ' + e.message;
+      } finally {
+        if (btnRecheck) btnRecheck.disabled = false;
+      }
+    }
+
+    async function applyOneClickUpdate() {
+      const btnApply = document.getElementById('btnApplyUpdate');
+      const btnRecheck = document.getElementById('btnRecheckUpdate');
+      const statusBox = document.getElementById('updStatusBox');
+
+      btnApply.disabled = true;
+      btnApply.innerText = '⏳ Đang cập nhật & khởi động lại...';
+      if (btnRecheck) btnRecheck.disabled = true;
+
+      statusBox.className = 'rounded-xl p-3.5 border text-xs space-y-1 bg-blue-50 border-blue-200 text-blue-900';
+      statusBox.innerHTML = '⏳ Đang tải bản cập nhật mới nhất từ GitHub, cài đặt thư viện và tự động khởi động lại ứng dụng...';
+
+      try {
+        const res = await fetch('/api/update/apply', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ auto_restart: true })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.detail || 'Cập nhật thất bại');
+        }
+
+        const targetSha = (data.new_version && data.new_version.short_sha) || '';
+        statusBox.className = 'rounded-xl p-3.5 border text-xs space-y-1 bg-emerald-50 border-emerald-300 text-emerald-900';
+        statusBox.innerHTML = `
+          <div class="font-bold">✔ Đã tải xong bản #${targetSha}! Đang khởi động lại máy chủ...</div>
+          <div>Trang sẽ tự động làm mới sau khoảng 2–3 giây...</div>
+        `;
+
+        // Wait 1.6s for old server to exit, then poll /api/update/version until the restarted server responds
+        setTimeout(() => {
+          let attempts = 0;
+          const waitTimer = setInterval(async () => {
+            attempts++;
+            try {
+              const ping = await fetch('/api/update/version?t=' + Date.now());
+              if (ping.ok) {
+                clearInterval(waitTimer);
+                window.location.reload();
+              }
+            } catch (_) {
+              if (attempts >= 15) {
+                clearInterval(waitTimer);
+                window.location.reload();
+              }
+            }
+          }, 900);
+        }, 1600);
+      } catch (e) {
+        statusBox.className = 'rounded-xl p-3.5 border text-xs space-y-1 bg-rose-50 border-rose-200 text-rose-800';
+        statusBox.innerText = '⚠️ Lỗi khi cập nhật: ' + e.message;
+        btnApply.disabled = false;
+        btnApply.innerText = '⬇️ Cập nhật ngay (Tự động tải & Khởi động lại)';
+        if (btnRecheck) btnRecheck.disabled = false;
+      }
+    }
+
+    async function publishDevUpdate() {
+      const btn = document.getElementById('btnPublishUpdate');
+      const msgInput = document.getElementById('devPublishMsg');
+      const statusBox = document.getElementById('updStatusBox');
+      const message = (msgInput.value || '').trim();
+
+      btn.disabled = true;
+      btn.innerText = '⏳ Đang đẩy lên GitHub...';
+      try {
+        const res = await fetch('/api/update/publish', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.detail || 'Không thể đẩy bản cập nhật');
+        }
+        msgInput.value = '';
+        await checkForUpdates();
+        statusBox.className = 'rounded-xl p-3.5 border text-xs space-y-1 bg-emerald-50 border-emerald-300 text-emerald-900';
+        statusBox.innerHTML = `<div class="font-bold">🎉 ${data.message}</div>`;
+      } catch (e) {
+        alert('Lỗi đẩy bản cập nhật: ' + e.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerText = '📤 Đẩy lên GitHub';
+      }
+    }
+
     window.addEventListener('DOMContentLoaded', async () => {
       await initDefaultFolder();
+      loadVersionBadge();
       try {
         const res = await fetch('/api/projects-latest');
         if (res.ok) {

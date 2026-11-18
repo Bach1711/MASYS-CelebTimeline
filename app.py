@@ -1,12 +1,17 @@
 import os
+import sys
 import re
 import time
 import json
 import uuid
 import ctypes
+import shutil
 import string
+import zipfile
 import threading
+import subprocess
 from typing import Dict, Any, List, Optional, Set
+import requests
 from fastapi import FastAPI, HTTPException, Form
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -31,6 +36,9 @@ WORKSPACE_DIR = os.path.join(BASE_DIR, "workspace")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 DEFAULT_OUTPUT_DIR = r"D:\TikTok_Videos\Output"
 FEEDBACK_FILE = os.path.join(BASE_DIR, "feedback.json")
+VERSION_FILE = os.path.join(BASE_DIR, "version.json")
+GITHUB_REPO = "Bach1711/MASYS-CelebTimeline"
+GITHUB_BRANCH = "main"
 
 os.makedirs(WORKSPACE_DIR, exist_ok=True)
 os.makedirs(STATIC_DIR, exist_ok=True)
@@ -961,6 +969,448 @@ def api_save_feedback(payload: Dict[str, Any]):
     with open(FEEDBACK_FILE, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
     return {"ok": True, "path": FEEDBACK_FILE, "updated_at": payload["updated_at"]}
+
+
+# ==============================================================================
+# AUTO-UPDATE SYSTEM (1-Click Check Update & Apply Update across PCs)
+# ==============================================================================
+
+class ApplyUpdateRequest(BaseModel):
+    auto_restart: bool = True
+
+
+class PublishUpdateRequest(BaseModel):
+    message: Optional[str] = None
+
+
+def _has_git_repo() -> bool:
+    return os.path.isdir(os.path.join(BASE_DIR, ".git")) and (shutil.which("git") is not None)
+
+
+def _run_git(args: List[str], timeout: int = 25) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git"] + args,
+        cwd=BASE_DIR,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+    )
+
+
+def _get_local_version_info() -> Dict[str, Any]:
+    """
+    Read current local version (commit SHA, message, date) from Git if available,
+    or from `version.json` if the app was copied to another PC without `.git`.
+    """
+    info: Dict[str, Any] = {
+        "sha": "",
+        "short_sha": "unknown",
+        "message": "Bản cài đặt cục bộ",
+        "date": "",
+        "author": "",
+        "has_git": False,
+        "has_local_changes": False,
+        "unpushed_count": 0,
+        "repo": GITHUB_REPO,
+        "branch": GITHUB_BRANCH,
+    }
+
+    if os.path.exists(VERSION_FILE):
+        try:
+            with open(VERSION_FILE, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+            if isinstance(saved, dict):
+                info.update({k: v for k, v in saved.items() if v})
+        except Exception:
+            pass
+
+    if _has_git_repo():
+        info["has_git"] = True
+        try:
+            r_sha = _run_git(["rev-parse", "HEAD"], timeout=5)
+            if r_sha.returncode == 0 and r_sha.stdout.strip():
+                sha = r_sha.stdout.strip()
+                info["sha"] = sha
+                info["short_sha"] = sha[:7]
+
+            r_log = _run_git(["log", "-1", "--format=%s||%ci||%an"], timeout=5)
+            if r_log.returncode == 0 and "||" in r_log.stdout:
+                parts = r_log.stdout.strip().split("||")
+                info["message"] = parts[0].strip()
+                info["date"] = parts[1].strip() if len(parts) > 1 else ""
+                info["author"] = parts[2].strip() if len(parts) > 2 else ""
+
+            r_st = _run_git(["status", "--porcelain"], timeout=5)
+            if r_st.returncode == 0:
+                dirty_lines = [
+                    ln for ln in r_st.stdout.splitlines()
+                    if ln.strip() and not ln.strip().endswith("version.json") and not ln.strip().endswith("feedback.json")
+                ]
+                info["has_local_changes"] = len(dirty_lines) > 0
+
+            r_unpushed = _run_git(["rev-list", "--count", f"origin/{GITHUB_BRANCH}..HEAD"], timeout=5)
+            if r_unpushed.returncode == 0 and r_unpushed.stdout.strip().isdigit():
+                info["unpushed_count"] = int(r_unpushed.stdout.strip())
+
+            # Keep version.json synced with current HEAD
+            if info["sha"]:
+                try:
+                    with open(VERSION_FILE, "w", encoding="utf-8") as f:
+                        json.dump(
+                            {
+                                "sha": info["sha"],
+                                "short_sha": info["short_sha"],
+                                "message": info["message"],
+                                "date": info["date"],
+                                "author": info["author"],
+                                "repo": GITHUB_REPO,
+                                "branch": GITHUB_BRANCH,
+                            },
+                            f,
+                            ensure_ascii=False,
+                            indent=2,
+                        )
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    return info
+
+
+def _fetch_remote_github_info(local_sha: str = "") -> Dict[str, Any]:
+    """
+    Query GitHub REST API (and/or `git fetch origin main`) for the latest commit on `main`.
+    Works on ANY PC even if Git is not installed!
+    """
+    remote_info: Dict[str, Any] = {
+        "sha": "",
+        "short_sha": "",
+        "message": "",
+        "date": "",
+        "author": "",
+        "commits": [],
+    }
+
+    if _has_git_repo():
+        try:
+            _run_git(["fetch", "origin", GITHUB_BRANCH, "--quiet"], timeout=15)
+        except Exception:
+            pass
+
+    headers = {
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "MASYS-CelebTimeline-Updater/1.0",
+    }
+    try:
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/commits/{GITHUB_BRANCH}"
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.ok:
+            data = r.json()
+            sha = data.get("sha") or ""
+            commit_obj = data.get("commit") or {}
+            author_obj = commit_obj.get("author") or {}
+            remote_info["sha"] = sha
+            remote_info["short_sha"] = sha[:7] if sha else ""
+            remote_info["message"] = (commit_obj.get("message") or "").splitlines()[0]
+            remote_info["date"] = author_obj.get("date") or ""
+            remote_info["author"] = author_obj.get("name") or ""
+
+        if remote_info["sha"] and local_sha and remote_info["sha"] != local_sha:
+            comp_url = f"https://api.github.com/repos/{GITHUB_REPO}/compare/{local_sha}...{remote_info['sha']}"
+            rc = requests.get(comp_url, headers=headers, timeout=8)
+            if rc.ok:
+                cdata = rc.json()
+                raw_commits = cdata.get("commits") or []
+                for c in reversed(raw_commits[-10:]):
+                    c_sha = c.get("sha") or ""
+                    c_msg = ((c.get("commit") or {}).get("message") or "").splitlines()[0]
+                    c_date = (((c.get("commit") or {}).get("author") or {}).get("date") or "")
+                    remote_info["commits"].append(
+                        {"sha": c_sha[:7], "message": c_msg, "date": c_date}
+                    )
+    except Exception:
+        pass
+
+    # Fallback to git origin/main if GitHub API was unreachable or rate-limited
+    if not remote_info["sha"] and _has_git_repo():
+        try:
+            r_sha = _run_git(["rev-parse", f"origin/{GITHUB_BRANCH}"], timeout=5)
+            if r_sha.returncode == 0 and r_sha.stdout.strip():
+                sha = r_sha.stdout.strip()
+                remote_info["sha"] = sha
+                remote_info["short_sha"] = sha[:7]
+            r_log = _run_git(["log", "-1", f"origin/{GITHUB_BRANCH}", "--format=%s||%ci||%an"], timeout=5)
+            if r_log.returncode == 0 and "||" in r_log.stdout:
+                parts = r_log.stdout.strip().split("||")
+                remote_info["message"] = parts[0].strip()
+                remote_info["date"] = parts[1].strip() if len(parts) > 1 else ""
+                remote_info["author"] = parts[2].strip() if len(parts) > 2 else ""
+            if local_sha and remote_info["sha"] and local_sha != remote_info["sha"]:
+                r_list = _run_git(["log", f"{local_sha}..origin/{GITHUB_BRANCH}", "--oneline", "-n", "10"], timeout=5)
+                if r_list.returncode == 0:
+                    for ln in r_list.stdout.splitlines():
+                        if ln.strip():
+                            sp = ln.strip().split(" ", 1)
+                            remote_info["commits"].append(
+                                {"sha": sp[0], "message": sp[1] if len(sp) > 1 else "", "date": ""}
+                            )
+        except Exception:
+            pass
+
+    if not remote_info["commits"] and remote_info["sha"]:
+        remote_info["commits"] = [
+            {
+                "sha": remote_info["short_sha"],
+                "message": remote_info["message"],
+                "date": remote_info["date"],
+            }
+        ]
+
+    return remote_info
+
+
+@app.get("/api/update/version")
+def api_update_version():
+    return _get_local_version_info()
+
+
+@app.get("/api/update/check")
+def api_update_check():
+    local_info = _get_local_version_info()
+    local_sha = local_info.get("sha") or ""
+    remote_info = _fetch_remote_github_info(local_sha=local_sha)
+    remote_sha = remote_info.get("sha") or ""
+
+    if not remote_sha:
+        raise HTTPException(
+            status_code=503,
+            detail="Không thể kết nối tới máy chủ GitHub để kiểm tra cập nhật. Vui lòng kiểm tra kết nối mạng.",
+        )
+
+    is_ahead_of_remote = False
+    if _has_git_repo() and local_sha and remote_sha and local_sha != remote_sha:
+        try:
+            r_anc = _run_git(["merge-base", "--is-ancestor", remote_sha, local_sha], timeout=5)
+            if r_anc.returncode == 0:
+                is_ahead_of_remote = True
+        except Exception:
+            pass
+
+    has_update = bool(remote_sha and remote_sha != local_sha and not is_ahead_of_remote)
+    update_method = "git" if _has_git_repo() else "github_zip"
+
+    return {
+        "ok": True,
+        "has_update": has_update,
+        "is_ahead_of_remote": is_ahead_of_remote,
+        "update_method": update_method,
+        "local": local_info,
+        "remote": remote_info,
+        "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
+def _schedule_server_restart():
+    """
+    Restart the Python FastAPI server process cleanly on Windows after returning the HTTP response:
+    - At t=0.6s: current process exits (`os._exit(0)`), freeing port 8765 immediately.
+    - At t=1.6s: detached helper launches the fresh `python app.py` on port 8765.
+    """
+    def _restart_worker():
+        time.sleep(0.6)
+        app_script = os.path.abspath(__file__)
+        helper_code = (
+            "import time, subprocess; "
+            "time.sleep(1.2); "
+            f"subprocess.Popen([r'''{sys.executable}''', r'''{app_script}'''], cwd=r'''{BASE_DIR}''')"
+        )
+        creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        try:
+            subprocess.Popen(
+                [sys.executable, "-c", helper_code],
+                cwd=BASE_DIR,
+                creationflags=creation_flags,
+            )
+        except Exception:
+            pass
+        os._exit(0)
+
+    t = threading.Thread(target=_restart_worker, daemon=True)
+    t.start()
+
+
+@app.post("/api/update/apply")
+def api_update_apply(req: ApplyUpdateRequest):
+    """
+    1-Click Update:
+    1. If `.git` and `git` exist, fetches `origin/main` and resets tracked files cleanly (`git reset --hard origin/main`).
+    2. Otherwise (or if git fails), downloads the latest ZIP archive directly from GitHub and extracts over `BASE_DIR`
+       while preserving `workspace/` and `feedback.json`.
+    3. Installs any new dependencies in `requirements.txt`.
+    4. Writes updated `version.json` and automatically restarts the server.
+    """
+    local_info = _get_local_version_info()
+    remote_info = _fetch_remote_github_info(local_sha=local_info.get("sha") or "")
+    remote_sha = remote_info.get("sha") or ""
+
+    updated_via = ""
+    error_details = []
+
+    # Engine 1: Update via Git if available
+    if _has_git_repo():
+        try:
+            r_fetch = _run_git(["fetch", "origin", GITHUB_BRANCH], timeout=35)
+            if r_fetch.returncode == 0:
+                r_reset = _run_git(["reset", "--hard", f"origin/{GITHUB_BRANCH}"], timeout=20)
+                if r_reset.returncode == 0:
+                    updated_via = "git"
+                else:
+                    error_details.append(f"git reset error: {r_reset.stderr}")
+            else:
+                error_details.append(f"git fetch error: {r_fetch.stderr}")
+        except Exception as e:
+            error_details.append(f"git exception: {e}")
+
+    # Engine 2: Fallback to direct GitHub ZIP download (works even on PCs without Git installed!)
+    if not updated_via:
+        tmp_dir = os.path.join(WORKSPACE_DIR, "_update_tmp")
+        try:
+            if os.path.exists(tmp_dir):
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            os.makedirs(tmp_dir, exist_ok=True)
+
+            zip_path = os.path.join(tmp_dir, "update_main.zip")
+            zip_urls = [
+                f"https://codeload.github.com/{GITHUB_REPO}/zip/refs/heads/{GITHUB_BRANCH}",
+                f"https://github.com/{GITHUB_REPO}/archive/refs/heads/{GITHUB_BRANCH}.zip",
+            ]
+            downloaded = False
+            for zurl in zip_urls:
+                try:
+                    resp = requests.get(zurl, timeout=45, stream=True)
+                    if resp.ok:
+                        with open(zip_path, "wb") as f:
+                            for chunk in resp.iter_content(chunk_size=65536):
+                                if chunk:
+                                    f.write(chunk)
+                        if os.path.exists(zip_path) and os.path.getsize(zip_path) > 5000:
+                            downloaded = True
+                            break
+                except Exception as ex:
+                    error_details.append(str(ex))
+
+            if not downloaded:
+                raise RuntimeError("Không thể tải gói cập nhật từ GitHub.")
+
+            extract_root = os.path.join(tmp_dir, "extracted")
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                zf.extractall(extract_root)
+
+            entries = os.listdir(extract_root)
+            src_root = os.path.join(extract_root, entries[0]) if len(entries) == 1 else extract_root
+
+            preserve_names = {"workspace", "output", ".git", "__pycache__", "feedback.json"}
+            for item_name in os.listdir(src_root):
+                if item_name in preserve_names:
+                    continue
+                s_path = os.path.join(src_root, item_name)
+                d_path = os.path.join(BASE_DIR, item_name)
+                if os.path.isdir(s_path):
+                    shutil.copytree(s_path, d_path, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(s_path, d_path)
+
+            updated_via = "github_zip"
+        except Exception as e:
+            error_details.append(f"zip update error: {e}")
+        finally:
+            try:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            except Exception:
+                pass
+
+    if not updated_via:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Cập nhật thất bại: {'; '.join(error_details)}",
+        )
+
+    # Install any updated Python dependencies silently
+    req_file = os.path.join(BASE_DIR, "requirements.txt")
+    if os.path.exists(req_file):
+        try:
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-r", req_file, "--quiet"],
+                cwd=BASE_DIR,
+                capture_output=True,
+                timeout=45,
+            )
+        except Exception:
+            pass
+
+    # Save updated version.json
+    new_version_data = {
+        "sha": remote_sha or local_info.get("sha", ""),
+        "short_sha": (remote_sha[:7] if remote_sha else local_info.get("short_sha", "")),
+        "message": remote_info.get("message") or local_info.get("message", ""),
+        "date": remote_info.get("date") or time.strftime("%Y-%m-%d %H:%M:%S"),
+        "author": remote_info.get("author") or local_info.get("author", ""),
+        "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "repo": GITHUB_REPO,
+        "branch": GITHUB_BRANCH,
+    }
+    try:
+        with open(VERSION_FILE, "w", encoding="utf-8") as f:
+            json.dump(new_version_data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+    if req.auto_restart:
+        _schedule_server_restart()
+
+    return {
+        "ok": True,
+        "updated_via": updated_via,
+        "new_version": new_version_data,
+        "restarting": req.auto_restart,
+    }
+
+
+@app.post("/api/update/publish")
+def api_update_publish(req: PublishUpdateRequest):
+    """
+    Developer helper: Commit any local changes & push `HEAD` to `origin/main` on GitHub
+    so that client PCs immediately see and receive the new update when clicking "Check Update".
+    """
+    if not _has_git_repo():
+        raise HTTPException(status_code=400, detail="Máy này không có Git repository (.git) để đẩy code.")
+
+    commit_msg = (req.message or "").strip() or f"Update MASYS CelebTimeline ({time.strftime('%Y-%m-%d %H:%M')})"
+
+    try:
+        # Update version.json first and stage changes
+        _run_git(["add", "-A"], timeout=15)
+        r_st = _run_git(["status", "--porcelain"], timeout=10)
+        if r_st.returncode == 0 and r_st.stdout.strip():
+            r_cm = _run_git(["commit", "-m", commit_msg], timeout=20)
+            if r_cm.returncode != 0 and "nothing to commit" not in (r_cm.stdout + r_cm.stderr).lower():
+                raise RuntimeError(r_cm.stderr or r_cm.stdout)
+
+        r_push = _run_git(["push", "origin", GITHUB_BRANCH], timeout=45)
+        if r_push.returncode != 0:
+            raise RuntimeError(r_push.stderr or r_push.stdout)
+
+        new_local = _get_local_version_info()
+        return {
+            "ok": True,
+            "published_version": new_local,
+            "message": f"Đã đẩy bản cập nhật #{new_local['short_sha']} lên GitHub ({GITHUB_REPO}) thành công! Các máy khác đã có thể bấm Cập nhật ngay.",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Không thể đẩy bản cập nhật lên GitHub: {e}")
 
 
 app.mount("/files", StaticFiles(directory=BASE_DIR), name="files")
