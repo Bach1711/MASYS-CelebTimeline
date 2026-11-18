@@ -178,6 +178,7 @@
             type="text"
             value=""
             placeholder="Tự động theo nhân vật..."
+            oninput="if(tableRowsData[activeTableRowIdx]){tableRowsData[activeTableRowIdx].years_str=this.value; renderCelebTable(); saveUiState();}"
             class="flex-1 px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-300 text-slate-800 font-mono text-xs focus:outline-none focus:border-blue-500 focus:bg-white"
           />
         </div>
@@ -559,6 +560,7 @@
           : '🔽 Mở rộng bảng (20 hàng)';
       }
       renderCelebTable();
+      saveUiState();
     }
 
     function getFilledTableRows() {
@@ -706,6 +708,43 @@
       tbody.innerHTML = html;
     }
 
+    const UI_STATE_STORAGE_KEY = 'masys_celeb_ui_state_v2';
+    let saveStateTimer = null;
+
+    function saveUiState() {
+      try {
+        const cleanRows = tableRowsData.map(r => ({
+          name: r.name || "",
+          wiki_title: r.wiki_title || null,
+          years_str: r.years_str || "",
+          scanned_info: r.scanned_info || null,
+          project_id: r.project_id || null,
+          is_scanning: false
+        }));
+        const stateObj = {
+          has_state: true,
+          visibleRowsCount,
+          activeTableRowIdx,
+          currentProjectId,
+          currentBatchId,
+          currentBatch,
+          outputFolder: (document.getElementById('outputFolderInput')?.value || '').trim(),
+          tableRowsData: cleanRows
+        };
+        localStorage.setItem(UI_STATE_STORAGE_KEY, JSON.stringify(stateObj));
+        if (saveStateTimer) clearTimeout(saveStateTimer);
+        saveStateTimer = setTimeout(() => {
+          fetch('/api/ui-state', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(stateObj)
+          }).catch(() => {});
+        }, 250);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
     function onRowNameInput(rowIdx, val) {
       const prevName = (tableRowsData[rowIdx].name || '').trim().toLowerCase();
       tableRowsData[rowIdx].name = val;
@@ -714,7 +753,12 @@
         tableRowsData[rowIdx].wiki_title = null;
         tableRowsData[rowIdx].scanned_info = null;
         tableRowsData[rowIdx].project_id = null;
+        if (currentBatch && Array.isArray(currentBatch.items)) {
+          currentBatch.items = currentBatch.items.filter(it => it.row_index !== rowIdx);
+        }
+        syncScannedTabsFromTable();
       }
+      saveUiState();
     }
 
     function onRowYearsInput(rowIdx, val) {
@@ -722,6 +766,7 @@
       if (rowIdx === activeTableRowIdx) {
         document.getElementById('yearsListInput').value = val;
       }
+      saveUiState();
     }
 
     function onRowPaste(event, startRowIdx) {
@@ -740,9 +785,13 @@
         visibleRowsCount = MAX_TABLE_ROWS;
       }
       renderCelebTable();
+      syncScannedTabsFromTable();
+      saveUiState();
     }
 
-    function clearTableRow(rowIdx) {
+    async function clearTableRow(rowIdx) {
+      const oldPid = tableRowsData[rowIdx]?.project_id || null;
+      // Leave row #rowIdx completely empty in place so user can type a replacement celebrity right into row #rowIdx!
       tableRowsData[rowIdx] = {
         name: "",
         wiki_title: null,
@@ -751,8 +800,71 @@
         project_id: null,
         is_scanning: false
       };
+
+      // Immediately remove this row's Tab from currentBatch as well
+      if (currentBatch && Array.isArray(currentBatch.items)) {
+        currentBatch.items = currentBatch.items.filter(
+          it => it.row_index !== rowIdx && (!oldPid || it.project_id !== oldPid)
+        );
+        currentBatch.total_count = currentBatch.items.length;
+      }
+      if (currentBatchId) {
+        fetch(`/api/batch/${currentBatchId}/remove-row`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ row_index: rowIdx, project_id: oldPid })
+        }).catch(() => {});
+      }
+
       renderCelebTable();
-      syncScannedTabsFromTable();
+
+      const remaining = getFilledTableRows();
+      if (!remaining.length) {
+        currentProjectId = null;
+        currentProject = null;
+        currentBatch = null;
+        currentBatchId = null;
+        wipeStoryboardDOM();
+        document.getElementById('batchSwitcherBar').classList.add('hidden');
+        saveUiState();
+        return;
+      }
+
+      // If the deleted row was the currently displayed tab, switch to the nearest remaining filled row
+      if (activeTableRowIdx === rowIdx || (oldPid && currentProjectId === oldPid)) {
+        const nextRow = remaining.find(f => f.rowIdx > rowIdx) || remaining[remaining.length - 1];
+        await selectRowTab(nextRow.rowIdx);
+      } else {
+        syncScannedTabsFromTable();
+        saveUiState();
+      }
+    }
+
+    function upsertBatchItemForRow(rowIdx, info, pid) {
+      if (!currentBatch || !Array.isArray(currentBatch.items)) return;
+      const existingIdx = currentBatch.items.findIndex(it => it.row_index === rowIdx);
+      const itemObj = {
+        index: existingIdx >= 0 ? existingIdx : currentBatch.items.length,
+        row_index: rowIdx,
+        name: info.name || tableRowsData[rowIdx].name.trim(),
+        display_name: info.name || tableRowsData[rowIdx].name.trim(),
+        wiki_title: info.wiki_title || info.name,
+        project_id: pid,
+        status: 'scanned',
+        progress_pct: 0,
+        progress_message: 'Đã quét thông tin — Sẵn sàng tạo video',
+        total_duration: 0.0,
+        output_path: '',
+        error: null
+      };
+      if (existingIdx >= 0) {
+        currentBatch.items[existingIdx] = itemObj;
+      } else {
+        currentBatch.items.push(itemObj);
+        currentBatch.items.sort((a, b) => (a.row_index ?? 0) - (b.row_index ?? 0));
+      }
+      currentBatch.items.forEach((it, idx) => { it.index = idx; });
+      currentBatch.total_count = currentBatch.items.length;
     }
 
     async function scanSingleTableRow(rowIdx, exactWikiTitle = null) {
@@ -764,24 +876,32 @@
       renderCelebTable();
 
       try {
+        const output_folder = document.getElementById('outputFolderInput').value.trim();
         const res = await fetch('/api/lookup', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             name: rawName || exactWikiTitle,
-            exact_wiki_title: exactWikiTitle || null
+            exact_wiki_title: exactWikiTitle || null,
+            row_index: rowIdx,
+            create_project: true,
+            output_folder
           })
         });
         if (!res.ok) return null;
         const info = await res.json();
         row.scanned_info = info;
         row.wiki_title = info.wiki_title || info.name;
+        if (info.project_id) {
+          row.project_id = info.project_id;
+        }
         if (info.recommended_years && info.recommended_years.length) {
           row.years_str = info.recommended_years.join(', ');
         }
+        upsertBatchItemForRow(rowIdx, info, row.project_id);
         activeTableRowIdx = rowIdx;
-        applyScannedInfoToPreview(rowIdx);
-        syncScannedTabsFromTable();
+        await selectRowTab(rowIdx);
+        saveUiState();
         return info;
       } catch (e) {
         console.error(e);
@@ -789,6 +909,8 @@
       } finally {
         row.is_scanning = false;
         renderCelebTable();
+        syncScannedTabsFromTable();
+        saveUiState();
       }
     }
 
@@ -816,37 +938,59 @@
       renderCelebTable();
 
       try {
+        const output_folder = document.getElementById('outputFolderInput').value.trim();
         const payloadItems = filled.map(({ rowIdx, row }) => ({
           row_index: rowIdx,
           name: row.name.trim(),
-          exact_wiki_title: row.wiki_title || null
+          exact_wiki_title: row.wiki_title || null,
+          existing_project_id: row.project_id || null,
+          years: parseYearsFromStr(row.years_str)
         }));
 
         const res = await fetch('/api/lookup-batch', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ items: payloadItems })
+          body: JSON.stringify({
+            items: payloadItems,
+            output_folder,
+            batch_id: currentBatchId || null
+          })
         });
         const data = await res.json();
         if (!res.ok) {
           throw new Error(data.detail || 'Lỗi khi quét danh sách nhân vật');
         }
 
-        const results = data.items || [];
+        const results = data.items || data.scanned_rows || [];
         results.forEach(info => {
           const rIdx = (typeof info.row_index === 'number') ? info.row_index : 0;
           if (tableRowsData[rIdx]) {
             tableRowsData[rIdx].scanned_info = info;
             tableRowsData[rIdx].wiki_title = info.wiki_title || info.name;
+            if (info.project_id) {
+              tableRowsData[rIdx].project_id = info.project_id;
+            }
             if (info.recommended_years && info.recommended_years.length) {
               tableRowsData[rIdx].years_str = info.recommended_years.join(', ');
             }
           }
         });
 
-        activeTableRowIdx = filled[0].rowIdx;
-        applyScannedInfoToPreview(activeTableRowIdx);
+        if (data.batch) {
+          currentBatch = data.batch;
+          currentBatchId = data.batch.batch_id;
+        }
+
+        // Keep activeTableRowIdx if it is still among filled rows, otherwise pick first filled row
+        const stillValidActive = filled.some(f => f.rowIdx === activeTableRowIdx);
+        if (!stillValidActive) {
+          activeTableRowIdx = filled[0].rowIdx;
+        }
+
+        renderCelebTable();
         syncScannedTabsFromTable();
+        await selectRowTab(activeTableRowIdx);
+        saveUiState();
         return true;
       } catch (e) {
         alert('Lỗi quét nhân vật: ' + e.message);
@@ -858,6 +1002,7 @@
           btnScan.disabled = false;
           btnScan.innerText = '🔍 1. Quét Nhân Vật';
         }
+        saveUiState();
       }
     }
 
@@ -876,7 +1021,7 @@
       const yearsArr = parseYearsFromStr(row.years_str) || info.recommended_years || [];
       document.getElementById('yearsListInput').value = yearsArr.join(', ');
 
-      // If this row does not have a running/ready project yet, show its placeholder grid cleanly
+      // If this row does not have a backend project_id yet, show its placeholder grid cleanly
       if (!row.project_id) {
         currentProjectId = null;
         currentProject = null;
@@ -886,58 +1031,49 @@
     }
 
     function syncScannedTabsFromTable() {
-      // If a batch is actively running or already created, renderBatchSwitcher handles tabs.
-      if (currentBatch && currentBatch.items && currentBatch.items.length) {
+      renderBatchSwitcher(currentBatch);
+    }
+
+    async function selectRowTab(rowIdx) {
+      const row = tableRowsData[rowIdx];
+      if (!row || !(row.name || '').trim()) return;
+
+      activeTableRowIdx = rowIdx;
+      renderCelebTable();
+
+      if (currentBatch && currentBatch.status === 'running') {
+        const runningItem = (currentBatch.items || [])[currentBatch.current_index];
+        batchFollowActive = !!(runningItem && runningItem.row_index === rowIdx);
+      }
+
+      if (row.project_id) {
+        currentProjectId = row.project_id;
+        wipeStoryboardDOM();
         renderBatchSwitcher(currentBatch);
-        return;
+        saveUiState();
+
+        try {
+          const res = await fetch(`/api/projects/${currentProjectId}`);
+          if (res.ok) {
+            const proj = await res.json();
+            renderStoryboard(proj);
+            if ((proj.status === 'running' || (currentBatch && currentBatch.status === 'running')) && !pollTimer) {
+              pollTimer = setInterval(pollProjectStatus, 1800);
+            }
+            return;
+          }
+        } catch (e) {
+          console.error(e);
+        }
       }
-      const filled = getFilledTableRows();
-      const bar = document.getElementById('batchSwitcherBar');
-      const summaryEl = document.getElementById('batchSummaryText');
-      const tabsEl = document.getElementById('batchTabsContainer');
-      const btnAll = document.getElementById('btnRenderAllBatch');
-      const btnCur = document.getElementById('btnRenderCurrentTabQuick');
 
-      if (!filled.length) {
-        bar.classList.add('hidden');
-        return;
-      }
-      bar.classList.remove('hidden');
-      if (btnAll) btnAll.classList.add('hidden');
-      if (btnCur) btnCur.classList.add('hidden');
-
-      const scannedCount = filled.filter(f => !!f.row.scanned_info).length;
-      summaryEl.innerText = `Đã duyệt ${scannedCount}/${filled.length} nhân vật — Kiểm tra kết quả quét trên bảng rồi bấm "🚀 2. Tạo Video (Tìm & Cắt)"`;
-
-      tabsEl.innerHTML = filled.map(({ rowIdx, row }, idx) => {
-        const info = row.scanned_info;
-        const labelName = (info && info.name) ? info.name : row.name.trim();
-        const isSelected = (rowIdx === activeTableRowIdx);
-        const spanBadge = info ? `${info.birth_year}–${info.death_year}` : 'Chưa quét';
-        const colorCls = info
-          ? 'bg-amber-50 text-amber-950 border-amber-300 hover:bg-amber-100'
-          : 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200';
-        const ringCls = isSelected ? 'ring-2 ring-indigo-600 font-bold shadow-xs' : 'font-semibold';
-
-        return `
-          <button
-            type="button"
-            onclick="selectScannedRowTab(${rowIdx})"
-            class="px-3 py-1.5 rounded-xl border text-xs flex items-center gap-1.5 transition cursor-pointer ${colorCls} ${ringCls}"
-          >
-            <span>${info ? '👤' : '🕒'}</span>
-            <span>${idx + 1}. ${escapeHtml(labelName)}</span>
-            <span class="px-1.5 py-0.5 rounded bg-white/80 text-[10px] font-mono">${escapeHtml(spanBadge)}</span>
-          </button>
-        `;
-      }).join('');
+      applyScannedInfoToPreview(rowIdx);
+      renderBatchSwitcher(currentBatch);
+      saveUiState();
     }
 
     function selectScannedRowTab(rowIdx) {
-      activeTableRowIdx = rowIdx;
-      renderCelebTable();
-      applyScannedInfoToPreview(rowIdx);
-      syncScannedTabsFromTable();
+      selectRowTab(rowIdx);
     }
 
     function wipeStoryboardDOM() {
@@ -971,6 +1107,7 @@
         is_scanning: false
       }));
       renderCelebTable();
+      saveUiState();
 
       document.getElementById('yearsListInput').value = '';
       document.getElementById('celebMetaName').innerText = 'Chưa chọn nhân vật';
@@ -1105,6 +1242,7 @@
       const chosen = document.getElementById('folderModalCurrentPath').value.trim();
       if (chosen) {
         document.getElementById('outputFolderInput').value = chosen;
+        saveUiState();
       }
       closeFolderPickerModal();
     }
@@ -1130,10 +1268,13 @@
       btnStart.disabled = true;
       wipeStoryboardDOM();
 
-      const batchItemsPayload = filled.map(({ row }) => ({
+      const batchItemsPayload = filled.map(({ rowIdx, row }) => ({
+        row_index: rowIdx,
         name: (row.scanned_info && row.scanned_info.name) ? row.scanned_info.name : row.name.trim(),
         wiki_title: row.wiki_title || (row.scanned_info && row.scanned_info.wiki_title) || null,
-        years: parseYearsFromStr(row.years_str)
+        exact_wiki_title: row.wiki_title || (row.scanned_info && row.scanned_info.wiki_title) || null,
+        years: parseYearsFromStr(row.years_str),
+        project_id: row.project_id || null
       }));
 
       btnStart.innerText = `⏳ Đang tìm & cắt (${batchItemsPayload.length} người)...`;
@@ -1151,6 +1292,7 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             items: batchItemsPayload,
+            batch_id: currentBatchId || null,
             output_folder,
             news_duration: 11.5,
             year_clip_duration: 4.2,
@@ -1165,14 +1307,16 @@
         currentBatchId = currentBatch.batch_id;
         batchFollowActive = true;
 
-        // Link pre-created project_ids back to table rows
+        // Link pre-created project_ids back to table rows by row_index
         (currentBatch.items || []).forEach((bItem, bIdx) => {
-          if (filled[bIdx]) {
-            filled[bIdx].row.project_id = bItem.project_id;
+          const rIdx = (typeof bItem.row_index === 'number') ? bItem.row_index : (filled[bIdx]?.rowIdx ?? bIdx);
+          if (tableRowsData[rIdx]) {
+            tableRowsData[rIdx].project_id = bItem.project_id;
           }
         });
 
         renderBatchSwitcher(currentBatch);
+        saveUiState();
 
         if (data.first_project && data.first_project.project_id) {
           currentProjectId = data.first_project.project_id;
@@ -1196,12 +1340,17 @@
         const b = await res.json();
         currentBatch = b;
         renderBatchSwitcher(b);
+        saveUiState();
 
         // If user hasn't manually clicked a specific tab, follow the currently running celebrity
         if (batchFollowActive && b.items && b.items[b.current_index]) {
           const activeItem = b.items[b.current_index];
           if (activeItem.project_id && activeItem.project_id !== currentProjectId) {
             currentProjectId = activeItem.project_id;
+            if (typeof activeItem.row_index === 'number') {
+              activeTableRowIdx = activeItem.row_index;
+              renderCelebTable();
+            }
             wipeStoryboardDOM();
             await pollProjectStatus();
             if (!pollTimer) {
@@ -1229,23 +1378,54 @@
       const btnAll = document.getElementById('btnRenderAllBatch');
       const btnCur = document.getElementById('btnRenderCurrentTabQuick');
 
-      if (!batch || !batch.items || !batch.items.length) {
+      const filled = getFilledTableRows();
+      if (!filled.length) {
         bar.classList.add('hidden');
         return;
       }
       bar.classList.remove('hidden');
 
-      const doneCnt = Number(batch.completed_count || 0);
-      const totalCnt = Number(batch.total_count || batch.items.length);
-      const readyOrExportedCount = batch.items.filter(it => it.status === 'ready_for_preview' || it.status === 'completed').length;
-      const exportedCount = batch.items.filter(it => !!it.output_path).length;
+      const bItems = (batch && Array.isArray(batch.items)) ? batch.items : [];
+      const rowTabModels = filled.map(({ rowIdx, row }) => {
+        const matchItem = bItems.find(
+          it => (row.project_id && it.project_id === row.project_id) || it.row_index === rowIdx
+        );
+        const info = row.scanned_info;
+        const labelName = (matchItem && (matchItem.display_name || matchItem.name))
+          || (info && info.name)
+          || row.name.trim();
+        const status = matchItem ? matchItem.status : (info ? 'scanned' : 'unscanned');
+        const progress_pct = matchItem ? (matchItem.progress_pct || 0) : 0;
+        const total_duration = matchItem ? (matchItem.total_duration || 0) : 0;
+        const output_path = matchItem ? (matchItem.output_path || '') : '';
+        const project_id = row.project_id || (matchItem && matchItem.project_id) || null;
+        return {
+          rowIdx,
+          row,
+          info,
+          labelName,
+          status,
+          progress_pct,
+          total_duration,
+          output_path,
+          project_id
+        };
+      });
 
-      if (batch.status === 'running') {
-        summaryEl.innerText = `⏳ Đang tìm & cắt tự động: Đã xong ${doneCnt}/${totalCnt} nhân vật (Bấm vào bất kỳ Tab nào để xem tiến độ ngay lập tức)`;
+      const totalCnt = rowTabModels.length;
+      const scannedCnt = rowTabModels.filter(m => !!m.info || m.status !== 'unscanned').length;
+      const readyOrExportedCount = rowTabModels.filter(m => m.status === 'ready_for_preview' || m.status === 'completed' || !!m.output_path).length;
+      const exportedCount = rowTabModels.filter(m => !!m.output_path || m.status === 'completed').length;
+      const isAnyRunning = (batch && batch.status === 'running') || rowTabModels.some(m => m.status === 'running');
+
+      if (isAnyRunning) {
+        summaryEl.innerText = `⏳ Đang tìm & cắt tự động: Đã xong ${readyOrExportedCount}/${totalCnt} nhân vật (Bấm vào bất kỳ Tab nào để xem tiến độ ngay lập tức)`;
       } else if (exportedCount === totalCnt && totalCnt > 0) {
         summaryEl.innerText = `🎉 Đã xuất MP4 hoàn tất cho cả ${exportedCount}/${totalCnt} nhân vật!`;
+      } else if (readyOrExportedCount > 0) {
+        summaryEl.innerText = `✔ Đã cắt xong ${readyOrExportedCount}/${totalCnt} nhân vật! Hãy kiểm nghiệm các cảnh bên dưới rồi bấm "💾 Xuất Video" hoặc "💾 Xuất Tất Cả MP4"`;
       } else {
-        summaryEl.innerText = `✔ Đã cắt xong ${doneCnt}/${totalCnt} nhân vật! Hãy kiểm nghiệm các cảnh bên dưới rồi bấm "💾 Xuất Video" hoặc "💾 Xuất Tất Cả MP4"`;
+        summaryEl.innerText = `Đã duyệt ${scannedCnt}/${totalCnt} nhân vật — Kiểm tra kết quả quét trên bảng rồi bấm "🚀 2. Tạo Video (Tìm & Cắt)"`;
       }
 
       if (btnAll) {
@@ -1257,82 +1437,82 @@
         }
       }
 
-      const activeItem = batch.items.find(it => it.project_id === currentProjectId);
+      const activeModel = rowTabModels.find(m => m.rowIdx === activeTableRowIdx || (m.project_id && m.project_id === currentProjectId));
       if (btnCur) {
-        if (activeItem && (activeItem.status === 'ready_for_preview' || activeItem.status === 'completed') && totalCnt > 1) {
+        if (activeModel && (activeModel.status === 'ready_for_preview' || activeModel.status === 'completed') && totalCnt > 1) {
           btnCur.classList.remove('hidden');
-          btnCur.innerText = `💾 Xuất Video (${activeItem.display_name || activeItem.name})`;
+          btnCur.innerText = `💾 Xuất Video (${activeModel.labelName})`;
         } else {
           btnCur.classList.add('hidden');
         }
       }
 
-      tabsEl.innerHTML = batch.items.map((item, idx) => {
-        const isSelected = item.project_id && item.project_id === currentProjectId;
-        const labelName = item.display_name || item.name;
+      tabsEl.innerHTML = rowTabModels.map(m => {
+        const isSelected = (m.project_id && m.project_id === currentProjectId) || (!currentProjectId && m.rowIdx === activeTableRowIdx);
         let statusIcon = '🕒';
-        let metaBadge = `${item.progress_pct || 0}% • Chờ chạy`;
+        let metaBadge = 'Chưa quét';
         let colorCls = 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200';
 
-        if (item.output_path || item.status === 'completed') {
+        if (m.output_path || m.status === 'completed') {
           statusIcon = '✅';
-          metaBadge = item.total_duration ? `Đã xuất MP4 • ${Number(item.total_duration).toFixed(1)}s` : 'Đã xuất MP4';
+          metaBadge = m.total_duration ? `Đã xuất MP4 • ${Number(m.total_duration).toFixed(1)}s` : 'Đã xuất MP4';
           colorCls = 'bg-emerald-100 text-emerald-950 border-emerald-400 hover:bg-emerald-200';
-        } else if (item.status === 'ready_for_preview') {
+        } else if (m.status === 'ready_for_preview') {
           statusIcon = '🎬';
-          metaBadge = item.total_duration ? `Cắt xong (${Number(item.total_duration).toFixed(1)}s) • Chờ xuất` : 'Cắt xong • Chờ xuất';
+          metaBadge = m.total_duration ? `Cắt xong (${Number(m.total_duration).toFixed(1)}s) • Chờ xuất` : 'Cắt xong • Chờ xuất';
           colorCls = 'bg-teal-50 text-teal-900 border-teal-300 hover:bg-teal-100';
-        } else if (item.status === 'running') {
+        } else if (m.status === 'running') {
           statusIcon = '⏳';
-          metaBadge = `Đang cắt ${item.progress_pct || 5}%`;
+          metaBadge = `Đang cắt ${m.progress_pct || 5}%`;
           colorCls = 'bg-blue-50 text-blue-900 border-blue-300 hover:bg-blue-100';
-        } else if (item.status === 'error') {
+        } else if (m.status === 'queued') {
+          statusIcon = '🕒';
+          metaBadge = `Chờ tới lượt`;
+          colorCls = 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200';
+        } else if (m.status === 'error') {
           statusIcon = '⚠️';
           metaBadge = 'Lỗi';
           colorCls = 'bg-rose-50 text-rose-800 border-rose-300 hover:bg-rose-100';
+        } else if (m.info || m.status === 'scanned') {
+          statusIcon = '👤';
+          metaBadge = m.info ? `${m.info.birth_year}–${m.info.death_year}` : 'Đã quét';
+          colorCls = 'bg-amber-50 text-amber-950 border-amber-300 hover:bg-amber-100';
         }
 
         const ringCls = isSelected ? 'ring-2 ring-indigo-600 font-bold shadow-xs' : 'font-semibold';
         return `
-          <button
-            type="button"
-            onclick="selectBatchItem(${idx})"
-            class="px-3 py-1.5 rounded-xl border text-xs flex items-center gap-1.5 transition cursor-pointer ${colorCls} ${ringCls}"
-            title="Bấm để xem ngay tiến độ & bảng lưới của ${escapeHtml(labelName)} (Không hiện popup)"
-          >
-            <span>${statusIcon}</span>
-            <span>${idx + 1}. ${escapeHtml(labelName)}</span>
-            <span class="px-1.5 py-0.5 rounded bg-white/80 text-[10px] font-mono">${escapeHtml(metaBadge)}</span>
-          </button>
+          <div class="inline-flex items-center rounded-xl border transition ${colorCls} ${ringCls}">
+            <button
+              type="button"
+              onclick="selectRowTab(${m.rowIdx})"
+              class="px-3 py-1.5 text-xs flex items-center gap-1.5 cursor-pointer"
+              title="Hàng #${m.rowIdx + 1}: Bấm để xem tiến độ & bảng lưới của ${escapeHtml(m.labelName)}"
+            >
+              <span>${statusIcon}</span>
+              <span>#${m.rowIdx + 1}. ${escapeHtml(m.labelName)}</span>
+              <span class="px-1.5 py-0.5 rounded bg-white/80 text-[10px] font-mono">${escapeHtml(metaBadge)}</span>
+            </button>
+            <button
+              type="button"
+              onclick="event.stopPropagation(); clearTableRow(${m.rowIdx});"
+              class="pr-2.5 pl-1 py-1.5 text-slate-400 hover:text-rose-600 font-bold text-xs cursor-pointer"
+              title="Xóa nhân vật ở Hàng #${m.rowIdx + 1} và đóng Tab này"
+            >
+              ✕
+            </button>
+          </div>
         `;
       }).join('');
     }
 
     async function selectBatchItem(idx) {
-      if (!currentBatch || !currentBatch.items || !currentBatch.items[idx]) return;
-      const item = currentBatch.items[idx];
-      // Requirement #3: NEVER show an alert() popup when switching tabs!
-      // Every item has a pre-created project_id right from batch start.
-      batchFollowActive = (idx === currentBatch.current_index && currentBatch.status === 'running');
-      activeTableRowIdx = idx;
-      renderCelebTable();
-
-      if (item.project_id) {
-        currentProjectId = item.project_id;
-        wipeStoryboardDOM();
-        renderBatchSwitcher(currentBatch);
-
-        const res = await fetch(`/api/projects/${currentProjectId}`);
-        if (res.ok) {
-          const proj = await res.json();
-          renderStoryboard(proj);
-          if ((proj.status === 'running' || currentBatch.status === 'running') && !pollTimer) {
-            pollTimer = setInterval(pollProjectStatus, 1800);
-          }
-        }
-      } else {
-        selectScannedRowTab(idx);
+      if (currentBatch && currentBatch.items && currentBatch.items[idx]) {
+        const item = currentBatch.items[idx];
+        const rIdx = (typeof item.row_index === 'number') ? item.row_index : idx;
+        await selectRowTab(rIdx);
+        return;
       }
+      await selectRowTab(idx);
     }
 
     async function renderAllBatchVideos() {
@@ -1364,7 +1544,7 @@
           renderBatchSwitcher(currentBatch);
         }
         await pollProjectStatus();
-        const renderedList = data.rendered || [];
+        const renderedList = data.rendered || data.exported_files || [];
         if (renderedList.length > 0) {
           lastExportedPath = renderedList[renderedList.length - 1].output_path;
           document.getElementById('exportedFilePath').innerText =
@@ -1373,6 +1553,7 @@
             renderedList.map(r => `${r.name} (${r.total_duration}s)`).join(' • ');
           document.getElementById('exportedBanner').classList.remove('hidden');
         }
+        saveUiState();
       } catch (e) {
         alert('Lỗi xuất tất cả MP4: ' + e.message);
       } finally {
@@ -1396,6 +1577,7 @@
           const btnStart = document.getElementById('btnStartPipeline');
           btnStart.disabled = false;
           btnStart.innerText = '🚀 2. Tạo Video (Tìm & Cắt)';
+          saveUiState();
         }
       } catch (e) {
         console.error(e);
@@ -1473,6 +1655,16 @@
         statusText.innerText = proj.progress_message || 'Đang tự động tìm video đúng mốc năm & lọc khuôn mặt AI...';
         progressBarWrap.classList.remove('hidden');
         progressBarFill.style.width = `${proj.progress_pct || 5}%`;
+      } else if (proj.status === 'queued') {
+        progressBarWrap.classList.add('hidden');
+        statusBadge.className = 'px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-300 font-semibold';
+        statusBadge.innerText = `🕒 Đang chờ tới lượt xử lý`;
+        statusText.innerText = proj.progress_message || 'Tab nhân vật này đang nằm trong hàng đợi xử lý.';
+      } else if (proj.status === 'scanned' || proj.status === 'idle') {
+        progressBarWrap.classList.add('hidden');
+        statusBadge.className = 'px-2.5 py-1 rounded-full bg-amber-100 text-amber-900 border border-amber-300 font-semibold';
+        statusBadge.innerText = `✔ Đã quét thông tin nhân vật`;
+        statusText.innerHTML = 'Kiểm tra thông tin & mốc năm trên bảng, sau đó bấm <strong>🚀 2. Tạo Video (Tìm & Cắt)</strong> để bắt đầu.';
       } else {
         progressBarWrap.classList.add('hidden');
         statusBadge.className = 'px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 font-semibold';
@@ -2178,45 +2370,118 @@
       }
     }
 
+    async function loadSavedUiState() {
+      let saved = null;
+      try {
+        const raw = localStorage.getItem(UI_STATE_STORAGE_KEY);
+        if (raw) saved = JSON.parse(raw);
+      } catch (_) {}
+      if (!saved || !saved.has_state) {
+        try {
+          const res = await fetch('/api/ui-state');
+          if (res.ok) {
+            const data = await res.json();
+            if (data && data.has_state) saved = data;
+          }
+        } catch (_) {}
+      }
+      return saved;
+    }
+
     window.addEventListener('DOMContentLoaded', async () => {
-      renderCelebTable();
       await initDefaultFolder();
       loadVersionBadge();
-      try {
-        const bRes = await fetch('/api/batch-latest');
-        if (bRes.ok) {
-          const bData = await bRes.json();
-          if (bData && bData.batch_id && bData.items && bData.items.length) {
-            currentBatch = bData;
-            currentBatchId = bData.batch_id;
-            bData.items.forEach((it, idx) => {
-              if (idx < MAX_TABLE_ROWS) {
-                tableRowsData[idx].name = it.display_name || it.name || '';
-                tableRowsData[idx].wiki_title = it.wiki_title || null;
-                tableRowsData[idx].project_id = it.project_id || null;
-              }
-            });
-            renderCelebTable();
-            renderBatchSwitcher(bData);
-            if (bData.status === 'running') {
-              batchPollTimer = setInterval(pollBatchStatus, 2000);
-            }
-          }
+
+      const saved = await loadSavedUiState();
+      if (saved && saved.has_state && Array.isArray(saved.tableRowsData)) {
+        visibleRowsCount = saved.visibleRowsCount === MAX_TABLE_ROWS ? MAX_TABLE_ROWS : 3;
+        const btnToggle = document.getElementById('btnToggleTableRows');
+        if (btnToggle) {
+          btnToggle.innerText = (visibleRowsCount === MAX_TABLE_ROWS)
+            ? '🔼 Thu gọn bảng (3 hàng)'
+            : '🔽 Mở rộng bảng (20 hàng)';
         }
-      } catch (_) {}
+        activeTableRowIdx = (typeof saved.activeTableRowIdx === 'number') ? saved.activeTableRowIdx : 0;
+        currentProjectId = saved.currentProjectId || null;
+        currentBatchId = saved.currentBatchId || null;
+        currentBatch = saved.currentBatch || null;
+        if (saved.outputFolder) {
+          document.getElementById('outputFolderInput').value = saved.outputFolder;
+        }
+
+        tableRowsData = Array.from({ length: MAX_TABLE_ROWS }, (_, i) => {
+          const sr = saved.tableRowsData[i] || {};
+          return {
+            name: sr.name || "",
+            wiki_title: sr.wiki_title || null,
+            years_str: sr.years_str || "",
+            scanned_info: sr.scanned_info || null,
+            project_id: sr.project_id || null,
+            is_scanning: false
+          };
+        });
+
+        renderCelebTable();
+        renderBatchSwitcher(currentBatch);
+
+        if (currentBatchId) {
+          try {
+            const bRes = await fetch(`/api/batch/${currentBatchId}`);
+            if (bRes.ok) {
+              const bData = await bRes.json();
+              currentBatch = bData;
+              renderBatchSwitcher(bData);
+              if (bData.status === 'running') {
+                const btnStart = document.getElementById('btnStartPipeline');
+                if (btnStart) {
+                  btnStart.disabled = true;
+                  btnStart.innerText = `⏳ Đang tìm & cắt (${bData.total_count || 1} người)...`;
+                }
+                batchPollTimer = setInterval(pollBatchStatus, 2000);
+              }
+            }
+          } catch (_) {}
+        }
+
+        const targetPid = currentProjectId || tableRowsData[activeTableRowIdx]?.project_id;
+        if (targetPid) {
+          currentProjectId = targetPid;
+          try {
+            const pRes = await fetch(`/api/projects/${targetPid}`);
+            if (pRes.ok) {
+              const proj = await pRes.json();
+              renderStoryboard(proj);
+              if (proj.status === 'running' || (currentBatch && currentBatch.status === 'running')) {
+                pollTimer = setInterval(pollProjectStatus, 1800);
+              }
+              return;
+            }
+          } catch (_) {}
+        }
+
+        if (tableRowsData[activeTableRowIdx]?.scanned_info) {
+          applyScannedInfoToPreview(activeTableRowIdx);
+        }
+        return;
+      }
+
+      // Fallback on very first launch when no UI state exists yet
+      renderCelebTable();
       try {
         const res = await fetch('/api/projects-latest');
         if (res.ok) {
           const latest = await res.json();
           if (latest && latest.project_id) {
             currentProjectId = latest.project_id;
-            if (!getFilledTableRows().length && latest.celeb_info && latest.celeb_info.name) {
+            if (latest.celeb_info && latest.celeb_info.name) {
               tableRowsData[0].name = latest.celeb_info.name;
               tableRowsData[0].wiki_title = latest.celeb_info.wiki_title || latest.celeb_info.name;
               tableRowsData[0].scanned_info = latest.celeb_info;
               tableRowsData[0].years_str = (latest.years || []).join(', ');
               tableRowsData[0].project_id = latest.project_id;
               renderCelebTable();
+              renderBatchSwitcher(currentBatch);
+              saveUiState();
             }
             if (latest.output_folder) {
               document.getElementById('outputFolderInput').value = latest.output_folder;

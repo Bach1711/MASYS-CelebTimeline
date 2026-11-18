@@ -1,6 +1,6 @@
 {
-  "sha": "e970c24bc4afe2a9df3f2837d74776472ad48eb9",
-  "short_sha": "e970c24",
-  "date": "2026-11-18 16:04:08 +0700",
-  "message": "feat(CON-210,CON-211): 3-20 row table, scan & approve step, popup-free tabs, manual/batch export, and 3-layer AI motion/no-text/continuous-face filter"
+  "sha": "633a3135c57c96d03727173f20a6e9b8b4b1dac1",
+  "short_sha": "633a313",
+  "date": "2026-11-18 16:46:47 +0700",
+  "message": "fix(CON-210): fix batch scan button, persist full UI/table/video state across F5, and support in-place row deletion/replacement with live tab sync"
 }
