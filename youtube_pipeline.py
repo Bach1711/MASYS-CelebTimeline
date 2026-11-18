@@ -487,6 +487,7 @@ def _score_and_validate_year_candidate(
     target_year: int,
     year_window: Tuple[int, int],
     current_year: int,
+    forbidden_years: Optional[Set[int]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Validate and score a YouTube candidate for a specific career milestone year.
@@ -557,6 +558,7 @@ def _score_and_validate_year_candidate(
 
     # 4. Validate explicit years in the video title
     min_yr, max_yr = year_window
+    forbid_yrs = forbidden_years or set()
     title_years = _extract_years_from_title(title_l)
 
     score = 0
@@ -564,7 +566,7 @@ def _score_and_validate_year_candidate(
     has_explicit_year = False
 
     if title_years:
-        valid_tys = [ty for ty in title_years if min_yr <= ty <= max_yr]
+        valid_tys = [ty for ty in title_years if min_yr <= ty <= max_yr and ty not in forbid_yrs]
         if not valid_tys:
             return None
         has_explicit_year = True
@@ -577,6 +579,8 @@ def _score_and_validate_year_candidate(
         else:
             score += 14
     else:
+        if target_year in forbid_yrs:
+            return None
         if target_year < current_year - 2:
             score -= 12
         else:
@@ -614,6 +618,7 @@ def find_and_prepare_year_clip(
     custom_url: Optional[str] = None,
     year_window: Optional[Tuple[int, int]] = None,
     used_video_ids: Optional[Set[str]] = None,
+    forbidden_years: Optional[Set[int]] = None,
     scene_index: int = 1,
 ) -> Dict[str, Any]:
     """
@@ -624,6 +629,7 @@ def find_and_prepare_year_clip(
     current_year = datetime.datetime.now().year
     win = year_window or (year - 2, min(current_year, year + 2))
     used_ids = used_video_ids or set()
+    forbid_yrs = forbidden_years or set()
 
     year_dir = os.path.join(project_dir, f"year_{year}")
     os.makedirs(year_dir, exist_ok=True)
@@ -668,6 +674,7 @@ def find_and_prepare_year_clip(
                         target_year=year,
                         year_window=win,
                         current_year=current_year,
+                        forbidden_years=forbid_yrs,
                     )
                     if scored is not None:
                         candidates.append(scored)
@@ -679,7 +686,7 @@ def find_and_prepare_year_clip(
             adj_queries = []
             for delta in [-1, 1, -2, 2]:
                 adj_y = year + delta
-                if win[0] <= adj_y <= win[1]:
+                if win[0] <= adj_y <= win[1] and adj_y not in forbid_yrs:
                     adj_queries.append(f"{celeb_name} {adj_y}")
                     adj_queries.append(f"{celeb_name} {adj_y} interview")
             _collect_from_queries(adj_queries[:4])
@@ -819,6 +826,78 @@ def _are_clips_visually_distinct(thumb_path_1: str, thumb_path_2: str, max_hist_
         return True
 
 
+def _extract_content_tokens(title: str, celeb_name: str, year: int) -> Set[str]:
+    """
+    Extract meaningful context tokens (movie/show/event/interviewer words) from a video title,
+    excluding the celebrity's name, years, and generic filler words.
+    """
+    t = _normalize_text(title)
+    name_parts = {p for p in re.split(r"[^a-z0-9]+", _normalize_text(celeb_name)) if len(p) >= 2}
+    stopwords = {
+        "interview", "clip", "video", "scene", "full", "rare", "hd", "4k", "official",
+        "the", "with", "and", "for", "from", "in", "on", "at", "of", "to", "by", "part", "pt",
+        "actress", "actor", "star", "show", "talk", "late", "night", "archive",
+        str(year), str(year - 1), str(year + 1), str(year % 100),
+    } | name_parts
+    tokens = {w for w in re.split(r"[^a-z0-9]+", t) if len(w) >= 3 and w not in stopwords and not w.isdigit()}
+    return tokens
+
+
+def _title_content_similarity(title1: str, title2: str, celeb_name: str, year: int) -> float:
+    """
+    Return Jaccard similarity (0.0 = completely different video topic/event, 1.0 = identical topic)
+    between two video titles of the same celebrity and year.
+    """
+    toks1 = _extract_content_tokens(title1, celeb_name, year)
+    toks2 = _extract_content_tokens(title2, celeb_name, year)
+    if not toks1 or not toks2:
+        return 0.0
+    inter = len(toks1 & toks2)
+    union = len(toks1 | toks2)
+    return float(inter) / float(max(1, union))
+
+
+def _are_video_candidates_completely_different(
+    cand1: Dict[str, Any],
+    cand2: Dict[str, Any],
+    celeb_name: str,
+    year: int,
+) -> bool:
+    """
+    Check if two YouTube video candidates in the same year are genuinely 2 completely different videos
+    (different video_id AND not a re-upload of the same interview/movie clip).
+    """
+    if not cand1 or not cand2:
+        return False
+    if cand1.get("video_id") == cand2.get("video_id"):
+        return False
+    sim = _title_content_similarity(
+        cand1.get("title", ""),
+        cand2.get("title", ""),
+        celeb_name=celeb_name,
+        year=year,
+    )
+    return sim < 0.45
+
+
+def count_distinct_same_year_videos(yc: Dict[str, Any], celeb_name: str) -> int:
+    """
+    Return the number of OTHER completely different videos in the exact same year `yc['year']`
+    available in `yc['candidates']`. If >= 1, then this year has at least 2 completely different videos!
+    """
+    yr = int(yc.get("year") or 0)
+    cands = yc.get("candidates") or []
+    distinct_others = []
+    for c in cands:
+        if c.get("video_id") == yc.get("video_id"):
+            continue
+        if not c.get("has_explicit_year") or int(c.get("matched_year") or 0) != yr:
+            continue
+        if _are_video_candidates_completely_different(yc, c, celeb_name=celeb_name, year=yr):
+            distinct_others.append(c)
+    return len(distinct_others)
+
+
 def create_second_scene_for_year(
     existing_yc: Dict[str, Any],
     celeb_name: str,
@@ -830,10 +909,11 @@ def create_second_scene_for_year(
     max_clip_duration: float = 5.4,
 ) -> Optional[Dict[str, Any]]:
     """
-    Create a 2nd consecutive scene (`Cảnh 2`) for the same year (ONLY used for middle/later years,
-    never for the first year clip):
-    1. Priority 1: Pick a 2nd distinct YouTube video of that same year (`video_id != existing_yc['video_id']`).
-    2. Priority 2: Pick a non-overlapping segment from the same video ONLY if it is at least 12 seconds
+    Create a 2nd consecutive scene (`Cảnh 2`) for the same year (ONLY used when the project does not
+    have enough distinct years to reach ~1 minute, or when requested by user, and never for the first year clip):
+    1. Priority 1 (Strictly prioritized): If the year has >= 2 completely different YouTube videos in that
+       exact same year (`matched_year == yr`), take Scene 2 from that 2nd completely different video!
+    2. Priority 2 (Fallback): Pick a non-overlapping segment from the same video ONLY if it is at least 12s
        away AND visually distinct (different camera angle/background via histogram check).
     """
     yr = int(existing_yc["year"])
@@ -841,40 +921,147 @@ def create_second_scene_for_year(
     year_dir = os.path.join(project_dir, f"year_{req_yr}")
     os.makedirs(year_dir, exist_ok=True)
     existing_thumb = existing_yc.get("thumb_path") or ""
+    existing_vid = existing_yc.get("video_id", "")
+    existing_channel = _normalize_text(existing_yc.get("channel", ""))
+    forbid_ids = set(used_video_ids or set())
+    if existing_vid:
+        forbid_ids.add(existing_vid)
 
-    # Option A: Try picking a 2nd distinct YouTube video of the same year first
-    cands = existing_yc.get("candidates") or []
-    other_cands = [c for c in cands if c.get("video_id") != existing_yc.get("video_id") and c.get("has_explicit_year")]
-    if other_cands:
-        try:
-            forbid_ids = set(used_video_ids or set())
-            forbid_ids.add(existing_yc.get("video_id", ""))
-            second_vid_yc = find_and_prepare_year_clip(
-                celeb_name=celeb_name,
-                year=yr,
-                project_dir=project_dir,
-                face_engine=face_engine,
-                ref_embeddings=ref_embeddings,
+    # Option A: Gather all candidate videos belonging to the EXACT SAME YEAR `yr`
+    cands = list(existing_yc.get("candidates") or [])
+    same_year_other_cands = [
+        c for c in cands
+        if c.get("video_id") and c.get("video_id") not in forbid_ids
+        and c.get("has_explicit_year") and int(c.get("matched_year") or 0) == yr
+    ]
+
+    # If fewer than 2 same-year distinct candidates were cached, do a quick extra search for this exact year
+    if len(same_year_other_cands) < 2:
+        current_year = datetime.datetime.now().year
+        seen_ids = {c.get("video_id") for c in cands if c.get("video_id")} | forbid_ids
+        extra_queries = [
+            f"{celeb_name} {yr}",
+            f"{celeb_name} {yr} movie scene",
+            f"{celeb_name} {yr} tv show",
+        ]
+        for eq in extra_queries:
+            for item in search_youtube(eq, max_results=6):
+                vid = item.get("video_id")
+                if not vid or vid in seen_ids:
+                    continue
+                seen_ids.add(vid)
+                scored = _score_and_validate_year_candidate(
+                    item,
+                    celeb_name=celeb_name,
+                    target_year=yr,
+                    year_window=(yr, yr),
+                    current_year=current_year,
+                )
+                if scored and scored.get("has_explicit_year") and int(scored.get("matched_year") or 0) == yr:
+                    same_year_other_cands.append(scored)
+            if len(same_year_other_cands) >= 3:
+                break
+
+    # Sort same-year candidates so COMPLETELY DIFFERENT videos (different topic/movie/show & different channel) come FIRST!
+    def _rank_second_video(c: Dict[str, Any]):
+        is_comp_diff = _are_video_candidates_completely_different(existing_yc, c, celeb_name=celeb_name, year=yr)
+        title_sim = _title_content_similarity(existing_yc.get("title", ""), c.get("title", ""), celeb_name=celeb_name, year=yr)
+        diff_channel = bool(_normalize_text(c.get("channel", "")) != existing_channel)
+        return (
+            is_comp_diff,
+            diff_channel,
+            round(1.0 - title_sim, 3),
+            float(c.get("relevance") or 0),
+        )
+
+    same_year_other_cands.sort(key=_rank_second_video, reverse=True)
+
+    # Try downloading & cutting Scene 2 from the top distinct video(s) of that exact same year
+    for cand in same_year_other_cands[:4]:
+        vid = cand["video_id"]
+        vid_dur = float(cand.get("duration") or 90.0)
+        if vid_dur <= 45.0:
+            windows = [(0.0, vid_dur)]
+        elif vid_dur <= 120.0:
+            windows = [(6.0, min(50.0, vid_dur - 6.0))]
+        else:
+            w1_start = round(min(40.0, max(12.0, vid_dur * 0.20)), 1)
+            windows = [(w1_start, 50.0)]
+
+        for w_idx, (dl_start, dl_dur) in enumerate(windows):
+            raw_path = os.path.join(year_dir, f"raw_{vid}_w{w_idx}.mp4")
+            if not download_youtube_section(cand["url"], raw_path, start_sec=dl_start, duration_sec=dl_dur, with_audio=False):
+                continue
+
+            segments = face_engine.find_best_segments(
+                raw_path,
                 clip_duration=4.4,
-                min_clip_duration=min_clip_duration,
-                max_clip_duration=max_clip_duration,
-                candidate_index=int(existing_yc.get("candidate_index", 0)) + 1,
-                segment_index=0,
-                year_window=(yr - 1, yr + 1),
-                used_video_ids=forbid_ids,
-                scene_index=2,
+                min_duration=min_clip_duration,
+                max_duration=max_clip_duration,
+                ref_embeddings=ref_embeddings,
+                sample_fps=2.0,
+                top_k=5,
+                skip_start_sec=0.5,
             )
-            if (
-                second_vid_yc.get("video_id") != existing_yc.get("video_id")
-                and float(second_vid_yc.get("face_similarity", 0)) >= 0.25
-            ):
-                second_vid_yc["year"] = yr
-                second_vid_yc["status"] = "ready"
-                return second_vid_yc
-        except Exception:
-            pass
+            if not segments:
+                continue
 
-    # Option B: Cut a 2nd segment from the existing raw video ONLY if >= 12s apart AND visually distinct shot
+            for seg_idx, chosen_seg in enumerate(segments[:3]):
+                sim = float(chosen_seg.get("similarity", 0.0))
+                m_ratio = float(chosen_seg.get("match_ratio", 0.0))
+                f_ratio = float(chosen_seg.get("face_ratio", 0.0))
+                if sim < 0.25 or m_ratio < 0.50 or f_ratio < 0.70:
+                    continue
+
+                rel_start = float(chosen_seg["start_sec"])
+                seg_dur = float(chosen_seg.get("duration_sec") or 4.4)
+                ts = int(time.time() * 100) % 100000
+                out_clip = os.path.join(year_dir, f"clip_{yr}_{vid}_w{w_idx}_s{seg_idx}_sc2_{ts}.mp4")
+                thumb_path = os.path.join(year_dir, f"thumb_{yr}_{vid}_w{w_idx}_s{seg_idx}_sc2_{ts}.jpg")
+
+                if not cut_video_clip(raw_path, out_clip, start_sec=rel_start, duration_sec=seg_dur, keep_audio=False):
+                    continue
+
+                extract_thumbnail(out_clip, thumb_path, time_sec=seg_dur * 0.4)
+                if existing_thumb and os.path.exists(existing_thumb):
+                    if not _are_clips_visually_distinct(existing_thumb, thumb_path):
+                        try:
+                            os.remove(out_clip)
+                            os.remove(thumb_path)
+                        except Exception:
+                            pass
+                        continue
+
+                actual_dur = get_video_duration(out_clip) or seg_dur
+                merged_cands = [cand] + [c for c in cands if c.get("video_id") != vid]
+                return {
+                    "clip_id": f"{yr}_sc2_{ts}",
+                    "year": yr,
+                    "requested_year": req_yr,
+                    "scene_index": 2,
+                    "video_id": vid,
+                    "title": cand["title"],
+                    "url": cand["url"],
+                    "channel": cand.get("channel", ""),
+                    "start_sec": round(dl_start + rel_start, 2),
+                    "rel_start_sec": round(rel_start, 2),
+                    "raw_offset": round(dl_start, 2),
+                    "duration_sec": round(actual_dur, 2),
+                    "face_score": chosen_seg.get("score", 0.0),
+                    "face_similarity": sim,
+                    "face_ratio": f_ratio,
+                    "match_ratio": m_ratio,
+                    "clip_path": out_clip,
+                    "raw_path": raw_path,
+                    "thumb_path": thumb_path,
+                    "candidate_index": 0,
+                    "segment_index": seg_idx,
+                    "segments": segments,
+                    "candidates": merged_cands[:8],
+                    "status": "ready",
+                }
+
+    # Option B: Fallback to cutting a 2nd segment from the existing raw video ONLY if >= 12s apart AND visually distinct shot
     raw_path = existing_yc.get("raw_path")
     segments = existing_yc.get("segments") or []
     curr_seg_idx = int(existing_yc.get("segment_index", 0))

@@ -117,20 +117,21 @@ def lookup_celebrity(name: str, save_dir: Optional[str] = None, target_clip_coun
 
     notable_years = sorted(year_counter.keys())
 
-    # Dynamically decide how many milestones fit this celebrity's career depth:
-    # - Rich career (>= 14 notable years & span >= 35 yrs): 11-12 milestones (~60-66s video)
-    # - Medium career (8-13 notable years): 9-10 milestones
-    # - Fewer notable years (< 8): use their actual notable years (5-8 years), and pipeline will create 2 consecutive scenes per year!
+    # Dynamically decide how many distinct milestones fit this celebrity's career depth:
+    # - Always prioritize finding enough DISTINCT years (10-12 distinct years -> ~54-62s) so no year needs to be repeated!
+    # - Only when a celebrity genuinely has fewer career years (< 9) will the pipeline repeat years to reach ~1 minute.
     if target_clip_count is not None and target_clip_count > 0:
         adaptive_count = target_clip_count
     else:
         career_span = max(10, death_year - (birth_year + 20))
-        if len(notable_years) >= 14 and career_span >= 35:
+        if len(notable_years) >= 12 and career_span >= 30:
             adaptive_count = 12
-        elif len(notable_years) >= 10 and career_span >= 25:
+        elif len(notable_years) >= 9 and career_span >= 20:
+            adaptive_count = 11
+        elif len(notable_years) >= 7 and career_span >= 14:
             adaptive_count = 10
-        elif len(notable_years) >= 6:
-            adaptive_count = min(9, len(notable_years))
+        elif len(notable_years) >= 5:
+            adaptive_count = len(notable_years)
         else:
             adaptive_count = max(6, len(notable_years) or 7)
 

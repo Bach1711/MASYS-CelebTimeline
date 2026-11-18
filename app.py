@@ -18,6 +18,7 @@ from youtube_pipeline import (
     find_and_prepare_news_clip,
     find_and_prepare_year_clip,
     create_second_scene_for_year,
+    count_distinct_same_year_videos,
     cut_video_clip,
     extract_thumbnail,
     get_video_duration,
@@ -279,14 +280,14 @@ def api_start_project(req: StartPipelineRequest):
 
     output_folder = (req.output_folder or DEFAULT_OUTPUT_DIR).strip() or DEFAULT_OUTPUT_DIR
 
-    # Adaptive target duration per clip based on how many years we start with:
-    # Fewer years -> longer clip duration (4.4s-5.4s); Many years (10-12) -> 4.0s-4.8s so total is ~60s!
+    # Adaptive target duration per clip based on how many distinct years we start with:
+    # Fewer years -> longer clip duration (4.6s-5.6s); 10-12 distinct years -> 4.4s-5.2s so total is ~56-62s without repeating years!
     if len(years) <= 7:
-        base_dur, min_dur, max_dur = 4.8, 4.0, 5.6
-    elif len(years) <= 9:
-        base_dur, min_dur, max_dur = 4.5, 3.8, 5.4
+        base_dur, min_dur, max_dur = 4.9, 4.2, 5.6
+    elif len(years) <= 10:
+        base_dur, min_dur, max_dur = 4.7, 4.1, 5.4
     else:
-        base_dur, min_dur, max_dur = 4.2, 3.6, 5.0
+        base_dur, min_dur, max_dur = 4.4, 3.8, 5.2
 
     proj_state = {
         "project_id": project_id,
@@ -359,6 +360,8 @@ def _run_full_pipeline_worker(project_id: str):
 
     ref_embeddings = face_engine.extract_reference_embeddings(ref_imgs)
     used_video_ids: Set[str] = set()
+    used_years: Set[int] = set()
+    tried_years: Set[int] = set(years)
 
     # Step 1: Find & cut News Intro clip (8-15s with original anchor audio)
     actual_news_dur = news_dur
@@ -392,12 +395,12 @@ def _run_full_pipeline_worker(project_id: str):
             }
         _save_project_state(project_id)
 
-    # Step 2: Process each Year clip sequentially with strict chronological window & adaptive duration
+    # Step 2: Process each distinct Year clip sequentially with strict chronological window & adaptive duration
     total_years = max(1, len(years))
     year_Counts_seen: Dict[int, int] = {}
 
     for i, yr in enumerate(years):
-        pct = 18 + int((i / total_years) * 68)
+        pct = 18 + int((i / total_years) * 65)
         win = _compute_year_window(years, i)
         sc_idx = year_Counts_seen.get(yr, 0) + 1
         year_Counts_seen[yr] = sc_idx
@@ -424,11 +427,13 @@ def _run_full_pipeline_worker(project_id: str):
                 segment_index=0,
                 year_window=win,
                 used_video_ids=used_video_ids,
+                forbidden_years=used_years if sc_idx == 1 else None,
                 scene_index=sc_idx,
             )
             y_clip["status"] = "ready"
             if y_clip.get("video_id"):
                 used_video_ids.add(y_clip["video_id"])
+            used_years.add(int(y_clip["year"]))
 
             if float(y_clip.get("face_similarity", 0)) >= 0.30 and y_clip.get("thumb_path") and len(ref_embeddings) < 8:
                 extra_embs = face_engine.extract_reference_embeddings([y_clip["thumb_path"]])
@@ -451,29 +456,93 @@ def _run_full_pipeline_worker(project_id: str):
                 }
         _save_project_state(project_id)
 
-    # Step 3: Automatic "1 năm 2 cảnh liên tiếp" enrichment!
-    # If the celebrity had fewer years (or some years failed) or total duration is still under ~55s (~1 minute),
-    # automatically create a 2nd consecutive scene (`Cảnh 2`) for the richest years so total duration reaches ~56-65s (and always >= 44s)!
+    # Step 2.5: Before EVER repeating a year, try finding additional DISTINCT years from the celebrity's career!
+    # Rule: "Khi đủ video của các năm thì không cần lấy video lặp lại; chỉ khi không tìm thấy đủ năm để làm thành video tầm 1 phút thì mới lặp lại năm."
     with PROJECTS_LOCK:
         current_clips = list(PROJECTS[project_id].get("year_clips", []))
+        celeb_info_snapshot = dict(PROJECTS[project_id].get("celeb_info") or {})
 
     ready_clips = [c for c in current_clips if c.get("status") == "ready"]
     current_total_dur = actual_news_dur + sum(float(c.get("duration_sec") or 0) for c in ready_clips)
 
-    if ready_clips and current_total_dur < 56.0:
+    if len(ready_clips) < 10 and current_total_dur < 52.0:
+        notable_yrs = celeb_info_snapshot.get("notable_years") or []
+        yr_counts = celeb_info_snapshot.get("year_counts") or {}
+        reserve_candidates = [
+            int(ny)
+            for ny in notable_yrs
+            if int(ny) not in tried_years
+            and int(ny) not in used_years
+            and all(abs(int(ny) - uy) >= 2 for uy in used_years)
+        ]
+        reserve_candidates.sort(key=lambda y: int(yr_counts.get(str(y), yr_counts.get(y, 1))), reverse=True)
+
+        for extra_yr in reserve_candidates[:4]:
+            if len(ready_clips) >= 10 or current_total_dur >= 52.0:
+                break
+            tried_years.add(extra_yr)
+            with PROJECTS_LOCK:
+                PROJECTS[project_id]["progress_pct"] = 85
+                PROJECTS[project_id]["progress_message"] = (
+                    f"Đang tìm thêm mốc năm khác biệt ({extra_yr}) để đủ thời lượng ~1 phút không cần lặp năm..."
+                )
+            _save_project_state(project_id)
+            try:
+                extra_clip = find_and_prepare_year_clip(
+                    celeb_name=celeb_name,
+                    year=extra_yr,
+                    project_dir=pdir,
+                    face_engine=face_engine,
+                    ref_embeddings=ref_embeddings,
+                    clip_duration=year_dur,
+                    min_clip_duration=min_dur,
+                    max_clip_duration=max_dur,
+                    candidate_index=0,
+                    segment_index=0,
+                    year_window=(extra_yr - 1, extra_yr + 1),
+                    used_video_ids=used_video_ids,
+                    forbidden_years=used_years,
+                    scene_index=1,
+                )
+                extra_clip["status"] = "ready"
+                if extra_clip.get("video_id"):
+                    used_video_ids.add(extra_clip["video_id"])
+                used_years.add(int(extra_clip["year"]))
+                ready_clips.append(extra_clip)
+                ready_clips.sort(key=lambda c: int(c["year"]))
+                current_total_dur = actual_news_dur + sum(float(c.get("duration_sec") or 0) for c in ready_clips)
+                with PROJECTS_LOCK:
+                    PROJECTS[project_id]["year_clips"] = list(ready_clips)
+                    PROJECTS[project_id]["years"] = [int(x["year"]) for x in ready_clips]
+                _save_project_state(project_id)
+            except Exception:
+                continue
+
+    # Step 3: Repeat a year ("1 năm 2 cảnh liên tiếp") ONLY IF the app could NOT find enough distinct years
+    # to reach a ~1-minute video (i.e. fewer than 9 distinct years OR total duration is still under 49s).
+    # When a year IS repeated, strictly prioritize years that have >= 2 completely different videos in that same year!
+    has_enough_distinct_years = (
+        len(ready_clips) >= 10
+        or (len(ready_clips) >= 9 and current_total_dur >= 48.0)
+        or current_total_dur >= 52.0
+    )
+
+    if ready_clips and not has_enough_distinct_years:
         with PROJECTS_LOCK:
-            PROJECTS[project_id]["progress_pct"] = 90
+            PROJECTS[project_id]["progress_pct"] = 92
             PROJECTS[project_id]["progress_message"] = (
-                "Đang tự động bổ sung cảnh thứ 2 liên tiếp cho các năm nhiều tư liệu để đạt chuẩn thời lượng ~1 phút..."
+                "Không tìm thấy đủ mốc năm riêng biệt cho ~1 phút — đang lấy 2 cảnh từ 2 video khác nhau cho các năm nhiều tư liệu..."
             )
         _save_project_state(project_id)
 
         # NEVER double the very first year clip (`ready_clips[0]`) so TikTok viewers immediately see the years progress!
         eligible_for_double = ready_clips[1:] if len(ready_clips) > 1 else []
+        # Strictly prioritize years that have at least 2 completely different videos in that exact same year!
         ranked_for_double = sorted(
             eligible_for_double,
             key=lambda c: (
-                len([x for x in (c.get("candidates") or []) if x.get("has_explicit_year") and x.get("video_id") != c.get("video_id")]) >= 1,
+                count_distinct_same_year_videos(c, celeb_name) >= 1,
+                count_distinct_same_year_videos(c, celeb_name),
                 len(c.get("segments") or []) >= 2,
                 float(c.get("face_similarity") or 0),
             ),
@@ -483,10 +552,9 @@ def _run_full_pipeline_worker(project_id: str):
         doubled_years: Set[int] = set()
         new_timeline_clips: List[Dict[str, Any]] = []
 
-        # Pick which years get a 2nd consecutive scene so total duration lands around ~58-64s (or maximum available >= 43s)
         extra_scenes_by_year: Dict[int, Dict[str, Any]] = {}
         for rc in ranked_for_double:
-            if current_total_dur >= 58.0:
+            if current_total_dur >= 55.0:
                 break
             yr_val = int(rc["year"])
             if yr_val in doubled_years:
@@ -509,9 +577,7 @@ def _run_full_pipeline_worker(project_id: str):
                 current_total_dur += float(sc2.get("duration_sec") or 4.0)
 
         if extra_scenes_by_year:
-            for c in current_clips:
-                if c.get("status") != "ready":
-                    continue
+            for c in ready_clips:
                 new_timeline_clips.append(c)
                 yr_val = int(c["year"])
                 if yr_val in extra_scenes_by_year:
@@ -735,6 +801,12 @@ def api_swap_year(project_id: str, req: SwapYearClipRequest):
         for idx, yc in enumerate(year_clips)
         if idx != target_idx and yc.get("video_id")
     }
+    other_used_years = {
+        int(yc["year"])
+        for idx, yc in enumerate(year_clips)
+        if idx != target_idx and yc.get("year")
+    }
+    sc_idx_val = int(current_yc.get("scene_index", 1))
 
     new_yc = find_and_prepare_year_clip(
         celeb_name=celeb_name,
@@ -748,7 +820,8 @@ def api_swap_year(project_id: str, req: SwapYearClipRequest):
         custom_url=req.custom_url,
         year_window=win,
         used_video_ids=other_used_ids,
-        scene_index=int(current_yc.get("scene_index", 1)),
+        forbidden_years=other_used_years if sc_idx_val == 1 else None,
+        scene_index=sc_idx_val,
     )
     new_yc["status"] = "ready"
     with PROJECTS_LOCK:
