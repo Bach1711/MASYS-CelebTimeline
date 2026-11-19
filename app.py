@@ -29,6 +29,7 @@ from youtube_pipeline import (
     extract_thumbnail,
     get_video_duration,
     download_youtube_section,
+    download_full_youtube_video,
     request_pipeline_cancel,
     clear_pipeline_cancel,
     is_pipeline_cancelled,
@@ -1567,6 +1568,32 @@ def api_swap_news(project_id: str, req: SwapNewsRequest):
     return _serialize_project(PROJECTS[project_id])
 
 
+def _build_project_ref_embeddings(proj: Dict[str, Any], exclude_slot_idx: Optional[int] = None) -> List[Any]:
+    """
+    Build enriched SFace reference embeddings using BOTH Wikipedia portraits
+    AND verified high-confidence thumbnails (`sim >= 0.34`, `match_ratio >= 0.85`) from
+    other year clips of the same celebrity (covering young, mid-career, and recent ages).
+    """
+    ref_paths = list(proj.get("celeb_info", {}).get("reference_images", []) or [])
+    verified_thumbs = []
+    for idx, yc in enumerate(proj.get("year_clips") or []):
+        if exclude_slot_idx is not None and idx == exclude_slot_idx:
+            continue
+        if (
+            yc.get("status") == "ready"
+            and float(yc.get("face_similarity") or 0.0) >= 0.34
+            and float(yc.get("match_ratio") or 0.0) >= 0.85
+            and yc.get("thumb_path")
+            and os.path.exists(yc["thumb_path"])
+        ):
+            verified_thumbs.append((int(yc.get("year") or 9999), -float(yc.get("face_similarity") or 0.0), yc["thumb_path"]))
+    verified_thumbs.sort()
+    for _, _, tp in verified_thumbs[:6]:
+        if tp not in ref_paths:
+            ref_paths.append(tp)
+    return face_engine.extract_reference_embeddings(ref_paths)
+
+
 @app.post("/api/projects/{project_id}/swap-year")
 def api_swap_year(project_id: str, req: SwapYearClipRequest):
     proj = _ensure_project_loaded(project_id)
@@ -1577,8 +1604,6 @@ def api_swap_year(project_id: str, req: SwapYearClipRequest):
 
     pdir = _project_dir(project_id)
     celeb_name = proj["celeb_info"]["name"]
-    ref_imgs = proj["celeb_info"].get("reference_images", [])
-    ref_embeddings = face_engine.extract_reference_embeddings(ref_imgs)
 
     year_clips = proj.get("year_clips", [])
     target_idx = None
@@ -1596,6 +1621,8 @@ def api_swap_year(project_id: str, req: SwapYearClipRequest):
 
     if target_idx is None or current_yc is None:
         raise HTTPException(status_code=404, detail=f"Không tìm thấy mốc năm {req.year}.")
+
+    ref_embeddings = _build_project_ref_embeddings(proj, exclude_slot_idx=target_idx)
 
     # Action: Add a 2nd consecutive scene for this year ("1 năm 2 cảnh liên tiếp")
     if req.action == "add_scene":
@@ -1759,11 +1786,13 @@ def _swap_to_next_face_segment(
     celeb_name: str,
 ) -> Dict[str, Any]:
     """
-    "Đổi cảnh": Find a DIFFERENT moment of the celebrity inside the SAME YouTube video.
-    1. Try remaining face segments of the already-downloaded window (skipping any moment within 4s of
-       segments already shown), ranked by face similarity to the celebrity's reference photos.
-    2. If exhausted, download a NEW 50s window further along the same video and scan it with the AI face engine.
-    3. Never silently switch to another video — raise a clear error so the user can press "Đổi video".
+    "Đổi cảnh": Scan inside the SAME YouTube video using enriched face embeddings of the target celebrity
+    and pick the strongest unshown segment where the celebrity's own face matches.
+    1. If not yet full-scanned (e.g. initial clip came from a 50s partial window with a wrong actor or low similarity),
+       first check if a high-confidence (`sim >= 0.36`, `match >= 0.78`) unshown segment already exists in the
+       current window; otherwise download & deep-scan the ENTIRE video once (`raw_full_{vid}.mp4`) so we find the
+       actual scene of the target celebrity anywhere in the video!
+    2. On subsequent "Đổi cảnh" clicks, instantly pick the next highest-similarity distinct scene from the full scan.
     """
     vid = current_yc.get("video_id") or "vid"
     url = current_yc.get("url")
@@ -1776,13 +1805,27 @@ def _swap_to_next_face_segment(
         return all(abs(abs_start - s) >= 4.0 for s in shown_abs)
 
     def _rank(seg: Dict[str, Any]):
+        sim_v = float(seg.get("similarity", 0.0))
+        match_v = float(seg.get("match_ratio", 0.0))
+        is_clean_live = bool(seg.get("is_live_motion", True)) and bool(seg.get("is_clean_no_text", True))
         return (
-            bool(seg.get("is_live_motion", True)) and bool(seg.get("is_clean_no_text", True)),
-            float(seg.get("similarity", 0.0)),
-            float(seg.get("match_ratio", 0.0)),
+            is_clean_live and sim_v >= 0.34 and match_v >= 0.78,
+            is_clean_live and sim_v >= 0.34 and match_v >= 0.65,
+            sim_v >= 0.32 and match_v >= 0.60,
+            is_clean_live and sim_v >= 0.27,
+            round(sim_v, 3),
+            float(seg.get("score", 0.0)),
         )
 
-    def _cut_from(raw_path: str, raw_offset: float, seg: Dict[str, Any], segs: List[Dict[str, Any]], seg_idx: int, tried_windows: List[float]):
+    def _cut_from(
+        raw_path: str,
+        raw_offset: float,
+        seg: Dict[str, Any],
+        segs: List[Dict[str, Any]],
+        seg_idx: int,
+        tried_windows: List[float],
+        is_full_scanned: bool,
+    ):
         rel_start = float(seg["start_sec"])
         seg_dur = float(seg.get("duration_sec") or clip_dur)
         ts = int(time.time() * 1000) % 10000000
@@ -1798,6 +1841,7 @@ def _swap_to_next_face_segment(
             {
                 "raw_path": raw_path,
                 "raw_offset": round(raw_offset, 2),
+                "full_scanned": is_full_scanned,
                 "segments": segs,
                 "segment_index": seg_idx,
                 "rel_start_sec": round(rel_start, 2),
@@ -1819,35 +1863,79 @@ def _swap_to_next_face_segment(
     tried_windows = [float(x) for x in (current_yc.get("tried_windows") or [])]
     raw_path = current_yc.get("raw_path")
     raw_offset = float(current_yc.get("raw_offset") or 0.0)
+    already_full = bool(current_yc.get("full_scanned"))
     if raw_offset not in tried_windows:
         tried_windows.append(raw_offset)
 
-    # Step 1: remaining segments of the current downloaded window
+    # Step 1: If already full-scanned, or if the current window has a HIGH-CONFIDENCE unshown match of the target celebrity, use it!
     if raw_path and os.path.exists(raw_path):
         segs = list(current_yc.get("segments") or [])
         if not segs:
             segs = face_engine.find_best_segments(
-                raw_path, clip_duration=clip_dur, min_duration=3.5, max_duration=5.6,
-                ref_embeddings=ref_embeddings, sample_fps=2.0, top_k=8, skip_start_sec=0.3,
+                raw_path,
+                clip_duration=clip_dur,
+                min_duration=3.2,
+                max_duration=5.5,
+                ref_embeddings=ref_embeddings,
+                sample_fps=1.2 if already_full else 2.0,
+                top_k=14 if already_full else 8,
+                skip_start_sec=0.3,
             ) or []
         cands = [(i, s) for i, s in enumerate(segs) if _is_new_moment(raw_offset + float(s["start_sec"]))]
         cands.sort(key=lambda x: _rank(x[1]), reverse=True)
         for i, s in cands:
-            res = _cut_from(raw_path, raw_offset, s, segs, i, tried_windows)
+            sim_s = float(s.get("similarity", 0.0))
+            match_s = float(s.get("match_ratio", 0.0))
+            # If we haven't scanned the whole video yet, ONLY accept cached partial-window segments if they are a CLEAR celebrity match!
+            if not already_full and (sim_s < 0.36 or match_s < 0.78):
+                break
+            if sim_s < 0.25 and match_s < 0.50:
+                continue
+            res = _cut_from(raw_path, raw_offset, s, segs, i, tried_windows, is_full_scanned=already_full)
             if res:
                 return res
 
-    # Step 2: scan new windows further along the same YouTube video
     if not url:
         raise HTTPException(status_code=400, detail="Đoạn này chưa có video gốc để đổi cảnh — hãy bấm 🔄 Đổi video.")
+
     vid_dur = 0.0
     for c in (current_yc.get("candidates") or []):
         if c.get("video_id") == vid:
             vid_dur = float(c.get("duration") or 0.0)
             break
+
+    # Step 2: Deep-scan the ENTIRE YouTube video once (`raw_full_{vid}.mp4`) when vid_dur <= 900s (15 min)
+    full_raw = os.path.join(year_dir, f"raw_full_{vid}.mp4")
+    if (not already_full) and (vid_dur <= 900.0):
+        ok_full = False
+        try:
+            ok_full = download_full_youtube_video(url, full_raw, max_height=480)
+        except Exception:
+            ok_full = False
+
+        if ok_full and os.path.exists(full_raw):
+            full_segs = face_engine.find_best_segments(
+                full_raw,
+                clip_duration=clip_dur,
+                min_duration=3.2,
+                max_duration=5.4,
+                ref_embeddings=ref_embeddings,
+                sample_fps=1.0,
+                top_k=16,
+                skip_start_sec=0.5,
+            ) or []
+            cands = [(i, sg) for i, sg in enumerate(full_segs) if _is_new_moment(float(sg["start_sec"]))]
+            cands.sort(key=lambda x: _rank(x[1]), reverse=True)
+            for i, sg in cands:
+                if float(sg.get("similarity", 0.0)) < 0.25:
+                    continue
+                res = _cut_from(full_raw, 0.0, sg, full_segs, i, tried_windows, is_full_scanned=True)
+                if res:
+                    return res
+
+    # Step 3: Fallback multi-window scan across very long videos (> 15 min)
     if vid_dur <= 0:
         vid_dur = max(raw_offset + 120.0, 240.0)
-
     window_len = 50.0
     window_starts = []
     s = 0.0
@@ -1855,10 +1943,9 @@ def _swap_to_next_face_segment(
         window_starts.append(round(s, 1))
         s += 45.0
     window_starts = [w for w in window_starts if all(abs(w - t) >= 20.0 for t in tried_windows)]
-    # Prefer windows nearest after the current one first, then others
     window_starts.sort(key=lambda w: (w < raw_offset, abs(w - raw_offset)))
 
-    for w_start in window_starts[:3]:
+    for w_start in window_starts[:4]:
         tried_windows.append(w_start)
         new_raw = os.path.join(year_dir, f"raw_{vid}_swap_{int(w_start)}.mp4")
         try:
@@ -1868,21 +1955,21 @@ def _swap_to_next_face_segment(
         if not ok:
             continue
         segs = face_engine.find_best_segments(
-            new_raw, clip_duration=clip_dur, min_duration=3.5, max_duration=5.6,
-            ref_embeddings=ref_embeddings, sample_fps=2.0, top_k=8, skip_start_sec=0.3,
+            new_raw, clip_duration=clip_dur, min_duration=3.2, max_duration=5.5,
+            ref_embeddings=ref_embeddings, sample_fps=1.5, top_k=8, skip_start_sec=0.3,
         ) or []
         cands = [(i, sg) for i, sg in enumerate(segs) if _is_new_moment(w_start + float(sg["start_sec"]))]
         cands.sort(key=lambda x: _rank(x[1]), reverse=True)
         for i, sg in cands:
-            if float(sg.get("similarity", 0.0)) < 0.22:
+            if float(sg.get("similarity", 0.0)) < 0.25:
                 continue
-            res = _cut_from(new_raw, w_start, sg, segs, i, tried_windows)
+            res = _cut_from(new_raw, w_start, sg, segs, i, tried_windows, is_full_scanned=False)
             if res:
                 return res
 
     raise HTTPException(
         status_code=400,
-        detail=f"Video này không còn cảnh nào khác có mặt {celeb_name} rõ ràng — hãy bấm 🔄 Đổi video hoặc ✂️ Chỉnh giây.",
+        detail=f"Video này không còn cảnh nào khác có mặt {celeb_name} giống ảnh mẫu — hãy bấm 🔄 Đổi video hoặc ✂️ Chỉnh giây.",
     )
 
 

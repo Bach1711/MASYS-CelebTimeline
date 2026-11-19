@@ -2166,7 +2166,18 @@
         return;
       }
       const card = document.getElementById(`card-year-slot-${slot_index}`);
-      if (card) card.classList.add('opacity-50', 'pointer-events-none');
+      let segBtn = null;
+      let oldSegHtml = '';
+      if (card) {
+        card.classList.add('opacity-60', 'pointer-events-none');
+        if (payload && payload.action === 'next_segment') {
+          segBtn = card.querySelector('button[onclick^="swapYearSegment"]');
+          if (segBtn) {
+            oldSegHtml = segBtn.innerHTML;
+            segBtn.innerHTML = '⏳ Quét mặt...';
+          }
+        }
+      }
       try {
         const res = await fetch(`/api/projects/${currentProjectId}/swap-year`, {
           method: 'POST',
@@ -2183,7 +2194,8 @@
       } catch (e) {
         alert('Lỗi kết nối: ' + e.message);
       } finally {
-        if (card) card.classList.remove('opacity-50', 'pointer-events-none');
+        if (segBtn && oldSegHtml) segBtn.innerHTML = oldSegHtml;
+        if (card) card.classList.remove('opacity-60', 'pointer-events-none');
       }
     }
 

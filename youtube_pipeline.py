@@ -469,6 +469,62 @@ def download_youtube_section(
     return False
 
 
+def download_full_youtube_video(
+    video_id_or_url: str,
+    output_path: str,
+    max_height: int = 480,
+) -> bool:
+    """
+    Download an entire YouTube video (at reasonable resolution up to 480p/720p) once
+    so Deep Face Scan ("Đổi cảnh") can scan every frame of the whole video quickly.
+    """
+    if is_pipeline_cancelled():
+        raise RuntimeError("PIPELINE_CANCELLED")
+    if os.path.exists(output_path) and os.path.getsize(output_path) > 20000:
+        return True
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    url = (
+        video_id_or_url
+        if video_id_or_url.startswith("http")
+        else f"https://www.youtube.com/watch?v={video_id_or_url}"
+    )
+
+    def _cancel_hook(d):
+        if is_pipeline_cancelled():
+            raise RuntimeError("PIPELINE_CANCELLED")
+
+    temp_base = output_path.replace(".mp4", "_tmp")
+    ydl_opts = {
+        "format": f"bestvideo[height<={max_height}][ext=mp4]/best[height<={max_height}][ext=mp4]/best[height<=720][ext=mp4]/best",
+        "outtmpl": temp_base + ".%(ext)s",
+        "quiet": True,
+        "no_warnings": True,
+        "merge_output_format": "mp4",
+        "ffmpeg_location": os.path.dirname(FFMPEG_BIN),
+        "progress_hooks": [_cancel_hook],
+    }
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+        for ext in [".mp4", ".mkv", ".webm"]:
+            cand = temp_base + ext
+            if os.path.exists(cand) and os.path.getsize(cand) > 10000:
+                if ext == ".mp4":
+                    shutil.move(cand, output_path)
+                    return True
+                ok = cut_video_clip(cand, output_path, 0, get_video_duration(cand) or 600.0, keep_audio=False)
+                try:
+                    os.remove(cand)
+                except Exception:
+                    pass
+                return ok
+    except Exception as e:
+        if "PIPELINE_CANCELLED" in str(e) or is_pipeline_cancelled():
+            raise RuntimeError("PIPELINE_CANCELLED")
+    return False
+
+
 def find_and_prepare_news_clip(
     celeb_name: str,
     project_dir: str,
@@ -1061,6 +1117,10 @@ def find_and_prepare_year_clip(
             windows = [(w1_start, 50.0)]
             if w2_start > w1_start + 20.0:
                 windows.append((w2_start, 50.0))
+            if vid_dur >= 180.0:
+                w3_start = round(min(vid_dur - 50.0, vid_dur * 0.62), 1)
+                if all(abs(w3_start - w[0]) >= 30.0 for w in windows):
+                    windows.append((w3_start, 50.0))
 
         for w_idx, (dl_start, dl_dur) in enumerate(windows):
             raw_path = os.path.join(year_dir, f"raw_{vid}_w{w_idx}.mp4")
@@ -1131,7 +1191,7 @@ def find_and_prepare_year_clip(
             }
 
             is_verified_celeb = (
-                sim >= 0.27
+                sim >= 0.34
                 and m_ratio >= 0.78
                 and f_ratio >= 0.80
                 and has_cont_celeb
