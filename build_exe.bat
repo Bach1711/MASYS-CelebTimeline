@@ -9,7 +9,7 @@ echo ======================================================================
 echo   MASYS CelebTimeline - DONG GOI FILE EXE (CACH 1 - PORTABLE)
 echo ======================================================================
 
-%PYTHON_EXE% -m PyInstaller --noconfirm --clean --onedir --name "MASYS-CelebTimeline" --exclude-module app --exclude-module celeb_service --exclude-module face_engine --exclude-module youtube_pipeline --exclude-module renderer --collect-all yt_dlp --collect-all youtube_transcript_api --collect-all cv2 --collect-all fastapi --collect-all uvicorn --collect-all starlette --collect-all pydantic launcher.py
+%PYTHON_EXE% -m PyInstaller --noconfirm --clean --onedir --icon "static\logo.ico" --name "MASYS-CelebTimeline" --exclude-module app --exclude-module celeb_service --exclude-module face_engine --exclude-module youtube_pipeline --exclude-module renderer --collect-all yt_dlp --collect-all youtube_transcript_api --collect-all cv2 --collect-all fastapi --collect-all uvicorn --collect-all starlette --collect-all pydantic launcher.py
 
 if errorlevel 1 (
     echo [LOI] Dong goi PyInstaller that bai!

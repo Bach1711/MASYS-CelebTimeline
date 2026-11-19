@@ -1,9 +1,9 @@
 {
-  "version": "ver 0.1",
-  "sha": "f2f82d34f6c2c05291b454cab012dc4a1077211e",
-  "short_sha": "f2f82d3",
-  "message": "feat(exe): add portable PyInstaller EXE launcher & build_exe.bat with 1-click update support",
-  "date": "2026-11-19 15:22:03 +0700",
+  "version": "ver 0.2",
+  "sha": "f701ed53dc8f2c3e33d655152ce1bd66247a55d3",
+  "short_sha": "f701ed5",
+  "message": "feat(brand): apply MASYS CelebTimeline app icon & brand logo (ver 0.2)",
+  "date": "2026-11-19 15:35:53 +0700",
   "author": "BachVu",
   "repo": "Bach1711/MASYS-CelebTimeline",
   "branch": "main"
