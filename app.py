@@ -36,7 +36,11 @@ from youtube_pipeline import (
 )
 from renderer import render_final_timeline_video
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = (
+    os.path.dirname(os.path.abspath(sys.executable))
+    if getattr(sys, "frozen", False)
+    else os.path.dirname(os.path.abspath(__file__))
+)
 WORKSPACE_DIR = os.path.join(BASE_DIR, "workspace")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 DEFAULT_OUTPUT_DIR = r"D:\TikTok_Videos\Output" if os.path.exists("D:\\") else os.path.join(BASE_DIR, "output")
@@ -2428,25 +2432,33 @@ def api_update_check():
 
 def _schedule_server_restart():
     """
-    Restart the Python FastAPI server process cleanly on Windows after returning the HTTP response:
-    - At t=0.6s: current process exits (`os._exit(0)`), freeing port 8765 immediately.
-    - At t=1.6s: detached helper launches the fresh `python app.py` on port 8765.
+    Restart the server process cleanly on Windows after returning the HTTP response:
+    - Works in BOTH raw Python mode and frozen PyInstaller `.exe` mode.
     """
     def _restart_worker():
         time.sleep(0.6)
-        app_script = os.path.abspath(__file__)
-        helper_code = (
-            "import time, subprocess; "
-            "time.sleep(1.2); "
-            f"subprocess.Popen([r'''{sys.executable}''', r'''{app_script}'''], cwd=r'''{BASE_DIR}''')"
-        )
         creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
         try:
-            subprocess.Popen(
-                [sys.executable, "-c", helper_code],
-                cwd=BASE_DIR,
-                creationflags=creation_flags,
-            )
+            if getattr(sys, "frozen", False):
+                exe_path = os.path.abspath(sys.executable)
+                cmd_str = f'timeout /t 2 /nobreak >nul & start "" "{exe_path}" --no-browser'
+                subprocess.Popen(
+                    ["cmd", "/c", cmd_str],
+                    cwd=BASE_DIR,
+                    creationflags=creation_flags,
+                )
+            else:
+                app_script = os.path.abspath(__file__)
+                helper_code = (
+                    "import time, subprocess; "
+                    "time.sleep(1.2); "
+                    f"subprocess.Popen([r'''{sys.executable}''', r'''{app_script}'''], cwd=r'''{BASE_DIR}''')"
+                )
+                subprocess.Popen(
+                    [sys.executable, "-c", helper_code],
+                    cwd=BASE_DIR,
+                    creationflags=creation_flags,
+                )
         except Exception:
             pass
         os._exit(0)
@@ -2525,7 +2537,18 @@ def api_update_apply(req: ApplyUpdateRequest):
             entries = os.listdir(extract_root)
             src_root = os.path.join(extract_root, entries[0]) if len(entries) == 1 else extract_root
 
-            preserve_names = {"workspace", "output", ".git", "__pycache__", "feedback.json"}
+            preserve_names = {
+                "workspace",
+                "output",
+                ".git",
+                "__pycache__",
+                "feedback.json",
+                "cookies.txt",
+                "bin",
+                "_internal",
+                "MASYS-CelebTimeline.exe",
+                "MASYS-CelebTimeline_EXE",
+            }
             for item_name in os.listdir(src_root):
                 if item_name in preserve_names:
                     continue
@@ -2551,27 +2574,28 @@ def api_update_apply(req: ApplyUpdateRequest):
             detail=f"Cập nhật thất bại: {'; '.join(error_details)}",
         )
 
-    # Install any updated Python dependencies & keep yt-dlp fresh so YouTube downloads don't break
-    req_file = os.path.join(BASE_DIR, "requirements.txt")
-    if os.path.exists(req_file):
+    # Install any updated Python dependencies & keep yt-dlp fresh when running via Python (never spawn pip inside frozen EXE)
+    if not getattr(sys, "frozen", False):
+        req_file = os.path.join(BASE_DIR, "requirements.txt")
+        if os.path.exists(req_file):
+            try:
+                subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "-r", req_file, "--quiet"],
+                    cwd=BASE_DIR,
+                    capture_output=True,
+                    timeout=45,
+                )
+            except Exception:
+                pass
         try:
             subprocess.run(
-                [sys.executable, "-m", "pip", "install", "-r", req_file, "--quiet"],
+                [sys.executable, "-m", "pip", "install", "-U", "yt-dlp", "--quiet"],
                 cwd=BASE_DIR,
                 capture_output=True,
                 timeout=45,
             )
         except Exception:
             pass
-    try:
-        subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-U", "yt-dlp", "--quiet"],
-            cwd=BASE_DIR,
-            capture_output=True,
-            timeout=45,
-        )
-    except Exception:
-        pass
 
     # Save updated version.json
     new_version_data = {

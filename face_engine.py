@@ -1,9 +1,17 @@
 import os
+import sys
 import cv2
 import numpy as np
 from typing import List, Dict, Any, Optional
 
-MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+_BASE_CANDIDATE = (
+    os.path.dirname(os.path.abspath(sys.executable))
+    if getattr(sys, "frozen", False)
+    else os.path.dirname(os.path.abspath(__file__))
+)
+MODELS_DIR = os.path.join(_BASE_CANDIDATE, "models")
+if not os.path.exists(MODELS_DIR) and getattr(sys, "_MEIPASS", None):
+    MODELS_DIR = os.path.join(sys._MEIPASS, "models")
 YUNET_PATH = os.path.join(MODELS_DIR, "face_detection_yunet_2023mar.onnx")
 SFACE_PATH = os.path.join(MODELS_DIR, "face_recognition_sface_2021dec.onnx")
 

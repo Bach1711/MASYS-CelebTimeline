@@ -9,3 +9,7 @@ venv/
 cookies.txt
 *.part
 *.ytdl
+build/
+dist/
+*.spec
+MASYS-CelebTimeline_EXE/

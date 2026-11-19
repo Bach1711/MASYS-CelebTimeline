@@ -1,4 +1,5 @@
 import os
+import sys
 import re
 import glob
 import time
@@ -12,6 +13,12 @@ import yt_dlp
 import numpy as np
 
 from face_engine import FaceEngine
+
+_EXE_ROOT_DIR = (
+    os.path.dirname(os.path.abspath(sys.executable))
+    if getattr(sys, "frozen", False)
+    else os.path.dirname(os.path.abspath(__file__))
+)
 
 PIPELINE_CANCEL_EVENT = threading.Event()
 
@@ -43,13 +50,10 @@ def _resolve_ffmpeg_bin(exe_name: str) -> str:
     4. Current Windows user's WinGet Packages (`%LOCALAPPDATA%\\Microsoft\\WinGet\\Packages\\*FFmpeg*`)
     5. Standard install paths (`C:\\ffmpeg\\bin`, `C:\\Program Files\\ffmpeg\\bin`)
     """
-    found = shutil.which(exe_name)
-    if found and os.path.exists(found):
-        return found
-
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+    base_dir = _EXE_ROOT_DIR
     candidates = [
         os.path.join(base_dir, "bin", f"{exe_name}.exe"),
+        os.path.join(base_dir, "_internal", "bin", f"{exe_name}.exe"),
         os.path.join(base_dir, f"{exe_name}.exe"),
         os.path.expandvars(rf"%LOCALAPPDATA%\Microsoft\WinGet\Links\{exe_name}.exe"),
         rf"C:\ffmpeg\bin\{exe_name}.exe",
@@ -58,6 +62,10 @@ def _resolve_ffmpeg_bin(exe_name: str) -> str:
     for c in candidates:
         if c and os.path.exists(c):
             return c
+
+    found = shutil.which(exe_name)
+    if found and os.path.exists(found):
+        return found
 
     winget_pkg_pattern = os.path.expandvars(rf"%LOCALAPPDATA%\Microsoft\WinGet\Packages\*FFmpeg*\**\bin\{exe_name}.exe")
     matches = glob.glob(winget_pkg_pattern, recursive=True)
@@ -156,7 +164,7 @@ def extract_thumbnail(video_path: str, thumb_path: str, time_sec: float = 1.5) -
 
 def _attach_cookies_opt(ydl_opts: Dict[str, Any]) -> Dict[str, Any]:
     """Attach optional `cookies.txt` in app root if user provided YouTube cookies to bypass rate/bot checks."""
-    cookies_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+    cookies_path = os.path.join(_EXE_ROOT_DIR, "cookies.txt")
     if os.path.exists(cookies_path) and os.path.getsize(cookies_path) > 20:
         ydl_opts["cookiefile"] = cookies_path
     return ydl_opts
