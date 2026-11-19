@@ -1501,10 +1501,11 @@ def api_get_project(project_id: str):
 
 @app.post("/api/projects/{project_id}/swap-news")
 def api_swap_news(project_id: str, req: SwapNewsRequest):
-    with PROJECTS_LOCK:
-        proj = PROJECTS.get(project_id)
+    proj = _ensure_project_loaded(project_id)
     if not proj:
         raise HTTPException(status_code=404, detail="Không tìm thấy dự án.")
+    if not any(p.get("status") == "running" for p in PROJECTS.values()):
+        clear_pipeline_cancel()
 
     pdir = _project_dir(project_id)
     celeb_name = proj["celeb_info"]["name"]
@@ -1568,10 +1569,11 @@ def api_swap_news(project_id: str, req: SwapNewsRequest):
 
 @app.post("/api/projects/{project_id}/swap-year")
 def api_swap_year(project_id: str, req: SwapYearClipRequest):
-    with PROJECTS_LOCK:
-        proj = PROJECTS.get(project_id)
+    proj = _ensure_project_loaded(project_id)
     if not proj:
         raise HTTPException(status_code=404, detail="Không tìm thấy dự án.")
+    if not any(p.get("status") == "running" for p in PROJECTS.values()):
+        clear_pipeline_cancel()
 
     pdir = _project_dir(project_id)
     celeb_name = proj["celeb_info"]["name"]
@@ -1621,8 +1623,8 @@ def api_swap_year(project_id: str, req: SwapYearClipRequest):
 
     # Action: Remove a scene
     if req.action == "remove_scene":
-        if len(year_clips) <= 3:
-            raise HTTPException(status_code=400, detail="Cần giữ lại tối thiểu 3 cảnh năm.")
+        if len(year_clips) <= 2:
+            raise HTTPException(status_code=400, detail="Cần giữ lại tối thiểu 2 cảnh năm.")
         with PROJECTS_LOCK:
             PROJECTS[project_id]["year_clips"].pop(target_idx)
             PROJECTS[project_id]["years"] = [int(x["year"]) for x in PROJECTS[project_id]["year_clips"]]
@@ -1630,69 +1632,77 @@ def api_swap_year(project_id: str, req: SwapYearClipRequest):
         return _serialize_project(PROJECTS[project_id])
 
     clip_dur = req.duration_sec or float(current_yc.get("duration_sec") or proj.get("year_clip_duration") or 4.2)
+    req_yr_dir = int(current_yc.get("requested_year") or current_yc["year"])
+    year_dir = os.path.join(pdir, f"year_{req_yr_dir}")
+    os.makedirs(year_dir, exist_ok=True)
 
-    # Action 1: Next face segment within the ALREADY downloaded video
-    if req.action == "next_segment" and current_yc.get("raw_path") and os.path.exists(current_yc["raw_path"]):
-        segments = current_yc.get("segments") or []
-        if len(segments) > 1:
-            next_seg_idx = (int(current_yc.get("segment_index", 0)) + 1) % len(segments)
-            chosen = segments[next_seg_idx]
-            rel_start = float(chosen["start_sec"])
-            seg_dur = float(chosen.get("duration_sec") or clip_dur)
-            vid = current_yc.get("video_id", "vid")
-            req_yr = int(current_yc.get("requested_year") or current_yc["year"])
-            year_dir = os.path.join(pdir, f"year_{req_yr}")
-            out_clip = os.path.join(year_dir, f"clip_{req.year}_{vid}_s{next_seg_idx}_{int(time.time())}.mp4")
-            thumb_path = os.path.join(year_dir, f"thumb_{req.year}_{vid}_s{next_seg_idx}_{int(time.time())}.jpg")
-            if cut_video_clip(current_yc["raw_path"], out_clip, start_sec=rel_start, duration_sec=seg_dur, keep_audio=False):
-                extract_thumbnail(out_clip, thumb_path, time_sec=seg_dur * 0.4)
-                current_yc["segment_index"] = next_seg_idx
-                current_yc["rel_start_sec"] = round(rel_start, 2)
-                current_yc["start_sec"] = round(float(current_yc.get("raw_offset", 0.0)) + rel_start, 2)
-                current_yc["duration_sec"] = round(get_video_duration(out_clip) or seg_dur, 2)
-                current_yc["face_score"] = chosen.get("score", 0.5)
-                current_yc["face_similarity"] = chosen.get("similarity", 0.5)
-                current_yc["face_ratio"] = chosen.get("face_ratio", 1.0)
-                current_yc["match_ratio"] = chosen.get("match_ratio", 0.5)
-                current_yc["clip_path"] = out_clip
-                current_yc["thumb_path"] = thumb_path
-                current_yc["status"] = "ready"
-                with PROJECTS_LOCK:
-                    PROJECTS[project_id]["year_clips"][target_idx] = current_yc
-                _save_project_state(project_id)
-                return _serialize_project(PROJECTS[project_id])
+    # Action 1: "Đổi cảnh" — pick ANOTHER face moment of the celebrity inside the SAME YouTube video.
+    if req.action == "next_segment":
+        new_yc = _swap_to_next_face_segment(current_yc, year_dir, clip_dur, ref_embeddings, celeb_name)
+        with PROJECTS_LOCK:
+            PROJECTS[project_id]["year_clips"][target_idx] = new_yc
+        _save_project_state(project_id)
+        return _serialize_project(PROJECTS[project_id])
 
-    # Action 2: Manual start_sec trim (with current URL or a custom URL)
+    # Action 2: "Chỉnh giây" — manual start_sec / duration trim (current URL or a custom URL)
     target_url = (req.custom_url or "").strip() or current_yc.get("url")
     if req.action == "custom_trim" and req.start_sec is not None and target_url:
-        req_yr = int(current_yc.get("requested_year") or current_yc["year"])
-        year_dir = os.path.join(pdir, f"year_{req_yr}")
         vid_match = re.search(r"(?:v=|youtu\.be/|shorts/)([A-Za-z0-9_-]{11})", target_url)
         vid = vid_match.group(1) if vid_match else current_yc.get("video_id", "vid")
-        raw_path = os.path.join(year_dir, f"raw_{vid}_manual_{int(req.start_sec)}.mp4")
-        if download_youtube_section(target_url, raw_path, start_sec=req.start_sec, duration_sec=clip_dur + 1.5, with_audio=False):
-            out_clip = os.path.join(year_dir, f"clip_{req.year}_{vid}_manual_{int(time.time())}.mp4")
-            thumb_path = os.path.join(year_dir, f"thumb_{req.year}_{vid}_manual_{int(time.time())}.jpg")
-            cut_video_clip(raw_path, out_clip, start_sec=0.0, duration_sec=clip_dur, keep_audio=False)
-            extract_thumbnail(out_clip, thumb_path, time_sec=clip_dur * 0.4)
-            current_yc["video_id"] = vid
-            current_yc["url"] = target_url
-            if req.custom_url:
-                current_yc["title"] = f"Custom Video ({vid})"
-            if req.new_year_label is not None and 1930 <= int(req.new_year_label) <= 2035:
-                current_yc["year"] = int(req.new_year_label)
-            current_yc["start_sec"] = round(req.start_sec, 2)
-            current_yc["duration_sec"] = round(get_video_duration(out_clip) or clip_dur, 2)
-            current_yc["clip_path"] = out_clip
-            current_yc["thumb_path"] = thumb_path
-            current_yc["status"] = "ready"
-            with PROJECTS_LOCK:
-                PROJECTS[project_id]["year_clips"][target_idx] = current_yc
-                PROJECTS[project_id]["years"] = [int(x["year"]) for x in PROJECTS[project_id]["year_clips"]]
-            _save_project_state(project_id)
-            return _serialize_project(PROJECTS[project_id])
+        ts = int(time.time() * 1000) % 10000000
+        out_clip = os.path.join(year_dir, f"clip_{req.year}_{vid}_manual_{ts}.mp4")
+        thumb_path = os.path.join(year_dir, f"thumb_{req.year}_{vid}_manual_{ts}.jpg")
+        start_abs = max(0.0, float(req.start_sec))
 
-    # Action 3: Swap to next YouTube video candidate or custom URL (AI auto-locate face)
+        cut_ok = False
+        # Fast path: trim locally if the requested range lies inside the already-downloaded raw window of the same video
+        raw_path = current_yc.get("raw_path")
+        raw_offset = float(current_yc.get("raw_offset") or 0.0)
+        if (
+            not req.custom_url
+            and vid == current_yc.get("video_id")
+            and raw_path
+            and os.path.exists(raw_path)
+        ):
+            raw_len = get_video_duration(raw_path)
+            rel = start_abs - raw_offset
+            if rel >= 0 and rel + clip_dur <= raw_len + 0.2:
+                cut_ok = cut_video_clip(raw_path, out_clip, start_sec=rel, duration_sec=clip_dur, keep_audio=False)
+
+        if not cut_ok:
+            dl_path = os.path.join(year_dir, f"raw_{vid}_manual_{int(start_abs * 10)}_{int(clip_dur * 10)}_{ts}.mp4")
+            try:
+                ok_dl = download_youtube_section(target_url, dl_path, start_sec=start_abs, duration_sec=clip_dur + 1.5, with_audio=False)
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Không tải được đoạn video từ YouTube: {e}")
+            if not ok_dl:
+                raise HTTPException(status_code=500, detail="Không tải được đoạn video từ YouTube (thử lại hoặc đổi giây bắt đầu).")
+            cut_ok = cut_video_clip(dl_path, out_clip, start_sec=0.0, duration_sec=clip_dur, keep_audio=False)
+            if not cut_ok:
+                raise HTTPException(status_code=500, detail="Không cắt được đoạn video mới.")
+
+        extract_thumbnail(out_clip, thumb_path, time_sec=clip_dur * 0.4)
+        new_yc = dict(current_yc)
+        new_yc["video_id"] = vid
+        new_yc["url"] = target_url
+        if req.custom_url:
+            new_yc["title"] = f"Custom Video ({vid})"
+            new_yc["raw_path"] = None
+            new_yc["segments"] = []
+        if req.new_year_label is not None and 1930 <= int(req.new_year_label) <= 2035:
+            new_yc["year"] = int(req.new_year_label)
+        new_yc["start_sec"] = round(start_abs, 2)
+        new_yc["duration_sec"] = round(get_video_duration(out_clip) or clip_dur, 2)
+        new_yc["clip_path"] = out_clip
+        new_yc["thumb_path"] = thumb_path
+        new_yc["status"] = "ready"
+        with PROJECTS_LOCK:
+            PROJECTS[project_id]["year_clips"][target_idx] = new_yc
+            PROJECTS[project_id]["years"] = [int(x["year"]) for x in PROJECTS[project_id]["year_clips"]]
+        _save_project_state(project_id)
+        return _serialize_project(PROJECTS[project_id])
+
+    # Action 3: "Đổi video" — swap to next YouTube video candidate or custom URL (AI auto-locate face)
     next_cand_idx = 0 if req.custom_url else int(current_yc.get("candidate_index", 0)) + 1
     years_list = [int(x.get("requested_year") or x["year"]) for x in year_clips]
     win = _compute_year_window(years_list, target_idx)
@@ -1702,6 +1712,8 @@ def api_swap_year(project_id: str, req: SwapYearClipRequest):
         for idx, yc in enumerate(year_clips)
         if idx != target_idx and yc.get("video_id")
     }
+    if not req.custom_url and current_yc.get("video_id"):
+        other_used_ids.add(current_yc["video_id"])
     other_used_years = {
         int(yc["year"])
         for idx, yc in enumerate(year_clips)
@@ -1709,21 +1721,26 @@ def api_swap_year(project_id: str, req: SwapYearClipRequest):
     }
     sc_idx_val = int(current_yc.get("scene_index", 1))
 
-    new_yc = find_and_prepare_year_clip(
-        celeb_name=celeb_name,
-        year=req_yr,
-        project_dir=pdir,
-        face_engine=face_engine,
-        ref_embeddings=ref_embeddings,
-        clip_duration=clip_dur,
-        candidate_index=next_cand_idx,
-        segment_index=0,
-        custom_url=req.custom_url,
-        year_window=win,
-        used_video_ids=other_used_ids,
-        forbidden_years=other_used_years if sc_idx_val == 1 else None,
-        scene_index=sc_idx_val,
-    )
+    try:
+        new_yc = find_and_prepare_year_clip(
+            celeb_name=celeb_name,
+            year=req_yr,
+            project_dir=pdir,
+            face_engine=face_engine,
+            ref_embeddings=ref_embeddings,
+            clip_duration=clip_dur,
+            candidate_index=0 if not req.custom_url else 0,
+            segment_index=0,
+            custom_url=req.custom_url,
+            year_window=win,
+            used_video_ids=other_used_ids,
+            forbidden_years=other_used_years if sc_idx_val == 1 else None,
+            extra_forbidden_terms=proj["celeb_info"].get("youtube_forbidden_terms", []),
+            scene_index=sc_idx_val,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Không tìm được video khác cho năm {req_yr}: {e}")
+    new_yc["candidate_index"] = next_cand_idx
     if req.new_year_label is not None and 1930 <= int(req.new_year_label) <= 2035:
         new_yc["year"] = int(req.new_year_label)
     new_yc["status"] = "ready"
@@ -1734,14 +1751,148 @@ def api_swap_year(project_id: str, req: SwapYearClipRequest):
     return _serialize_project(PROJECTS[project_id])
 
 
+def _swap_to_next_face_segment(
+    current_yc: Dict[str, Any],
+    year_dir: str,
+    clip_dur: float,
+    ref_embeddings: List[Any],
+    celeb_name: str,
+) -> Dict[str, Any]:
+    """
+    "Đổi cảnh": Find a DIFFERENT moment of the celebrity inside the SAME YouTube video.
+    1. Try remaining face segments of the already-downloaded window (skipping any moment within 4s of
+       segments already shown), ranked by face similarity to the celebrity's reference photos.
+    2. If exhausted, download a NEW 50s window further along the same video and scan it with the AI face engine.
+    3. Never silently switch to another video — raise a clear error so the user can press "Đổi video".
+    """
+    vid = current_yc.get("video_id") or "vid"
+    url = current_yc.get("url")
+    shown_abs = [float(x) for x in (current_yc.get("shown_abs_starts") or [])]
+    cur_abs = float(current_yc.get("start_sec") or 0.0)
+    if all(abs(cur_abs - s) > 0.5 for s in shown_abs):
+        shown_abs.append(cur_abs)
+
+    def _is_new_moment(abs_start: float) -> bool:
+        return all(abs(abs_start - s) >= 4.0 for s in shown_abs)
+
+    def _rank(seg: Dict[str, Any]):
+        return (
+            bool(seg.get("is_live_motion", True)) and bool(seg.get("is_clean_no_text", True)),
+            float(seg.get("similarity", 0.0)),
+            float(seg.get("match_ratio", 0.0)),
+        )
+
+    def _cut_from(raw_path: str, raw_offset: float, seg: Dict[str, Any], segs: List[Dict[str, Any]], seg_idx: int, tried_windows: List[float]):
+        rel_start = float(seg["start_sec"])
+        seg_dur = float(seg.get("duration_sec") or clip_dur)
+        ts = int(time.time() * 1000) % 10000000
+        out_clip = os.path.join(year_dir, f"clip_{current_yc.get('year')}_{vid}_seg_{ts}.mp4")
+        thumb_path = os.path.join(year_dir, f"thumb_{current_yc.get('year')}_{vid}_seg_{ts}.jpg")
+        if not cut_video_clip(raw_path, out_clip, start_sec=rel_start, duration_sec=seg_dur, keep_audio=False):
+            return None
+        thumb_off = float(seg.get("best_thumb_offset_sec") or seg_dur * 0.4)
+        extract_thumbnail(out_clip, thumb_path, time_sec=thumb_off)
+        abs_start = raw_offset + rel_start
+        new_yc = dict(current_yc)
+        new_yc.update(
+            {
+                "raw_path": raw_path,
+                "raw_offset": round(raw_offset, 2),
+                "segments": segs,
+                "segment_index": seg_idx,
+                "rel_start_sec": round(rel_start, 2),
+                "start_sec": round(abs_start, 2),
+                "duration_sec": round(get_video_duration(out_clip) or seg_dur, 2),
+                "face_score": seg.get("score", 0.5),
+                "face_similarity": seg.get("similarity", 0.5),
+                "face_ratio": seg.get("face_ratio", 1.0),
+                "match_ratio": seg.get("match_ratio", 0.5),
+                "clip_path": out_clip,
+                "thumb_path": thumb_path,
+                "status": "ready",
+                "shown_abs_starts": shown_abs + [round(abs_start, 2)],
+                "tried_windows": tried_windows,
+            }
+        )
+        return new_yc
+
+    tried_windows = [float(x) for x in (current_yc.get("tried_windows") or [])]
+    raw_path = current_yc.get("raw_path")
+    raw_offset = float(current_yc.get("raw_offset") or 0.0)
+    if raw_offset not in tried_windows:
+        tried_windows.append(raw_offset)
+
+    # Step 1: remaining segments of the current downloaded window
+    if raw_path and os.path.exists(raw_path):
+        segs = list(current_yc.get("segments") or [])
+        if not segs:
+            segs = face_engine.find_best_segments(
+                raw_path, clip_duration=clip_dur, min_duration=3.5, max_duration=5.6,
+                ref_embeddings=ref_embeddings, sample_fps=2.0, top_k=8, skip_start_sec=0.3,
+            ) or []
+        cands = [(i, s) for i, s in enumerate(segs) if _is_new_moment(raw_offset + float(s["start_sec"]))]
+        cands.sort(key=lambda x: _rank(x[1]), reverse=True)
+        for i, s in cands:
+            res = _cut_from(raw_path, raw_offset, s, segs, i, tried_windows)
+            if res:
+                return res
+
+    # Step 2: scan new windows further along the same YouTube video
+    if not url:
+        raise HTTPException(status_code=400, detail="Đoạn này chưa có video gốc để đổi cảnh — hãy bấm 🔄 Đổi video.")
+    vid_dur = 0.0
+    for c in (current_yc.get("candidates") or []):
+        if c.get("video_id") == vid:
+            vid_dur = float(c.get("duration") or 0.0)
+            break
+    if vid_dur <= 0:
+        vid_dur = max(raw_offset + 120.0, 240.0)
+
+    window_len = 50.0
+    window_starts = []
+    s = 0.0
+    while s < max(1.0, vid_dur - 8.0) and len(window_starts) < 12:
+        window_starts.append(round(s, 1))
+        s += 45.0
+    window_starts = [w for w in window_starts if all(abs(w - t) >= 20.0 for t in tried_windows)]
+    # Prefer windows nearest after the current one first, then others
+    window_starts.sort(key=lambda w: (w < raw_offset, abs(w - raw_offset)))
+
+    for w_start in window_starts[:3]:
+        tried_windows.append(w_start)
+        new_raw = os.path.join(year_dir, f"raw_{vid}_swap_{int(w_start)}.mp4")
+        try:
+            ok = download_youtube_section(url, new_raw, start_sec=w_start, duration_sec=min(window_len, max(10.0, vid_dur - w_start)), with_audio=False)
+        except Exception:
+            ok = False
+        if not ok:
+            continue
+        segs = face_engine.find_best_segments(
+            new_raw, clip_duration=clip_dur, min_duration=3.5, max_duration=5.6,
+            ref_embeddings=ref_embeddings, sample_fps=2.0, top_k=8, skip_start_sec=0.3,
+        ) or []
+        cands = [(i, sg) for i, sg in enumerate(segs) if _is_new_moment(w_start + float(sg["start_sec"]))]
+        cands.sort(key=lambda x: _rank(x[1]), reverse=True)
+        for i, sg in cands:
+            if float(sg.get("similarity", 0.0)) < 0.22:
+                continue
+            res = _cut_from(new_raw, w_start, sg, segs, i, tried_windows)
+            if res:
+                return res
+
+    raise HTTPException(
+        status_code=400,
+        detail=f"Video này không còn cảnh nào khác có mặt {celeb_name} rõ ràng — hãy bấm 🔄 Đổi video hoặc ✂️ Chỉnh giây.",
+    )
+
+
 def _render_project_internal(
     project_id: str,
     output_folder: Optional[str] = None,
     layout: str = "center_band",
     allow_missing_news: bool = False,
 ) -> Dict[str, Any]:
-    with PROJECTS_LOCK:
-        proj = PROJECTS.get(project_id)
+    proj = _ensure_project_loaded(project_id)
     if not proj:
         raise HTTPException(status_code=404, detail="Không tìm thấy dự án.")
 

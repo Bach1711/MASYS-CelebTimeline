@@ -1909,7 +1909,7 @@
     }
 
     function renderYearCard(cardEl, yc, slotIdx, sceneLabel, totalYearClips) {
-      const sig = `${slotIdx}_${yc.year}_${sceneLabel}_${yc.status}_${yc.clip_url || ''}_${yc.start_sec || 0}_${yc.duration_sec || 0}_${yc.face_similarity || 0}`;
+      const sig = `${slotIdx}_${yc.year}_${sceneLabel}_${totalYearClips}_${yc.status}_${yc.clip_url || ''}_${yc.start_sec || 0}_${yc.duration_sec || 0}_${yc.face_similarity || 0}`;
       if (cardEl.getAttribute('data-sig') === sig) return;
       cardEl.setAttribute('data-sig', sig);
 
@@ -2023,7 +2023,7 @@
           >
             ➕
           </button>` : ''}
-          ${totalYearClips > 4 ? `
+          ${totalYearClips > 2 ? `
           <button
             type="button"
             onclick="removeYearScene(${yc.year}, ${slotIdx})"
@@ -2174,8 +2174,12 @@
           body: JSON.stringify(payload)
         });
         const proj = await res.json();
-        if (res.ok) renderStoryboard(proj);
-        else alert(proj.detail || `Lỗi khi xử lý cảnh năm ${year}`);
+        if (res.ok) {
+          renderStoryboard(proj);
+          saveUiState();
+        } else {
+          alert(proj.detail || `Lỗi khi xử lý cảnh năm ${year}`);
+        }
       } catch (e) {
         alert('Lỗi kết nối: ' + e.message);
       } finally {

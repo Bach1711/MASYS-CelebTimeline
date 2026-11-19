@@ -1,6 +1,6 @@
 {
-  "sha": "41584c80740954a17bdbf1762ff10ffc3a9735c6",
-  "short_sha": "41584c8",
-  "date": "2026-11-18 17:24:23 +0700",
-  "message": "feat(CON-212): YouTube-first true-year timeline discovery, strict anti-wrong-year filter, Wikipedia subpage blocker, and instant Stop button"
+  "sha": "7cd0f90b8fcf7496bb404939cc6a9763c8c95258",
+  "short_sha": "7cd0f90",
+  "date": "2026-11-19 09:51:14 +0700",
+  "message": "fix(swap-year): fix Đổi cảnh (next_segment) within same video, Chỉnh giây, Thêm cảnh, Xóa cảnh and ensure saved projects load from disk"
 }
