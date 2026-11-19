@@ -1,6 +1,10 @@
 {
-  "sha": "95e1303aa5463a6557974516d07f3608cc7e60d6",
-  "short_sha": "95e1303",
-  "date": "2026-11-19 14:58:05 +0700",
-  "message": "fix(swap-scene): deep-scan full video with multi-age project face references when clicking Đổi cảnh"
+  "version": "ver 0.1",
+  "sha": "e950436b0b5305eee88ea4d61ff6955e75cf484c",
+  "short_sha": "e950436",
+  "message": "chore(release): ver 0.1 MVP — semantic version labels, yt-dlp auto-upgrade, cookies.txt support, D: drive fallback, and partial-download cleanup",
+  "date": "2026-11-19 15:11:10 +0700",
+  "author": "BachVu",
+  "repo": "Bach1711/MASYS-CelebTimeline",
+  "branch": "main"
 }

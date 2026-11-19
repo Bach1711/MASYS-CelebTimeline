@@ -154,16 +154,24 @@ def extract_thumbnail(video_path: str, thumb_path: str, time_sec: float = 1.5) -
         return False
 
 
+def _attach_cookies_opt(ydl_opts: Dict[str, Any]) -> Dict[str, Any]:
+    """Attach optional `cookies.txt` in app root if user provided YouTube cookies to bypass rate/bot checks."""
+    cookies_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+    if os.path.exists(cookies_path) and os.path.getsize(cookies_path) > 20:
+        ydl_opts["cookiefile"] = cookies_path
+    return ydl_opts
+
+
 def search_youtube(query: str, max_results: int = 8) -> List[Dict[str, Any]]:
     """Search YouTube via yt-dlp flat extraction for fast candidate discovery."""
     if is_pipeline_cancelled():
         return []
-    ydl_opts = {
+    ydl_opts = _attach_cookies_opt({
         "quiet": True,
         "no_warnings": True,
         "extract_flat": True,
         "skip_download": True,
-    }
+    })
     results = []
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -206,12 +214,12 @@ def fetch_video_upload_year(video_id: str) -> Optional[int]:
     """Quickly fetch the actual YouTube upload year of a video when its title has no explicit year."""
     if is_pipeline_cancelled() or not video_id:
         return None
-    ydl_opts = {
+    ydl_opts = _attach_cookies_opt({
         "quiet": True,
         "no_warnings": True,
         "skip_download": True,
         "playlist_items": "1",
-    }
+    })
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
@@ -408,7 +416,7 @@ def download_youtube_section(
             raise RuntimeError("PIPELINE_CANCELLED")
 
     temp_base = output_path.replace(".mp4", "_temp")
-    ydl_opts = {
+    ydl_opts = _attach_cookies_opt({
         "format": fmt,
         "outtmpl": temp_base + ".%(ext)s",
         "quiet": True,
@@ -418,7 +426,7 @@ def download_youtube_section(
         "download_ranges": yt_dlp.utils.download_range_func(None, [(start_sec, end_sec)]),
         "force_keyframes_at_cuts": True,
         "progress_hooks": [_cancel_hook],
-    }
+    })
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -495,7 +503,7 @@ def download_full_youtube_video(
             raise RuntimeError("PIPELINE_CANCELLED")
 
     temp_base = output_path.replace(".mp4", "_tmp")
-    ydl_opts = {
+    ydl_opts = _attach_cookies_opt({
         "format": f"bestvideo[height<={max_height}][ext=mp4]/best[height<={max_height}][ext=mp4]/best[height<=720][ext=mp4]/best",
         "outtmpl": temp_base + ".%(ext)s",
         "quiet": True,
@@ -503,7 +511,7 @@ def download_full_youtube_video(
         "merge_output_format": "mp4",
         "ffmpeg_location": os.path.dirname(FFMPEG_BIN),
         "progress_hooks": [_cancel_hook],
-    }
+    })
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])

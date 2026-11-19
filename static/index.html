@@ -33,10 +33,10 @@
               <h1 class="font-bold text-lg text-slate-900 leading-tight">MASYS CelebTimeline</h1>
               <span
                 id="versionBadge"
-                class="px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 border border-slate-200 font-mono text-[11px] font-semibold"
+                class="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 border border-slate-200 font-mono text-[11px] font-bold"
                 title="Phiên bản mã nguồn hiện tại trên máy"
               >
-                #...
+                ver 0.1
               </span>
               <button
                 id="btnOpenUpdateModal"
@@ -61,8 +61,8 @@
               <input
                 id="outputFolderInput"
                 type="text"
-                value="D:\TikTok_Videos\Output"
-                placeholder="D:\TikTok_Videos\Output"
+                value=""
+                placeholder="Đang tải thư mục đầu ra..."
                 class="w-full px-3 py-2 rounded-lg bg-slate-50 border border-slate-300 text-slate-700 text-xs font-mono focus:outline-none focus:border-blue-500 focus:bg-white transition"
               />
               <button
@@ -2305,15 +2305,22 @@
     }
 
     // --- 1-Click Auto-Update System ---
+    function formatVerDisplay(vObj) {
+      if (!vObj) return 'ver 0.1';
+      if (vObj.version) return vObj.version;
+      return vObj.short_sha ? `#${vObj.short_sha}` : 'ver 0.1';
+    }
+
     async function loadVersionBadge() {
       try {
         const res = await fetch('/api/update/version');
         if (!res.ok) return;
         const info = await res.json();
         const badge = document.getElementById('versionBadge');
-        if (badge && info.short_sha) {
-          badge.innerText = `#${info.short_sha}`;
-          badge.title = `Phiên bản hiện tại: #${info.short_sha} — ${info.message || ''}`;
+        if (badge) {
+          const verTxt = formatVerDisplay(info);
+          badge.innerText = verTxt;
+          badge.title = `Phiên bản hiện tại: ${verTxt} (#${info.short_sha || ''}) — ${info.message || ''}`;
         }
       } catch (e) {
         console.error(e);
@@ -2352,25 +2359,27 @@
 
         const loc = data.local || {};
         const rem = data.remote || {};
+        const locLabel = formatVerDisplay(loc);
+        const remLabel = formatVerDisplay(rem);
 
-        document.getElementById('updLocalSha').innerText = `#${loc.short_sha || 'unknown'}`;
+        document.getElementById('updLocalSha').innerText = loc.short_sha ? `${locLabel} (#${loc.short_sha})` : locLabel;
         document.getElementById('updLocalDate').innerText = (loc.date || '').slice(0, 16);
         document.getElementById('updLocalMsg').innerText = loc.message || 'Bản cài đặt cục bộ';
 
-        document.getElementById('updRemoteSha').innerText = `#${rem.short_sha || 'unknown'}`;
+        document.getElementById('updRemoteSha').innerText = rem.short_sha ? `${remLabel} (#${rem.short_sha})` : remLabel;
         document.getElementById('updRemoteDate').innerText = (rem.date || '').replace('T', ' ').slice(0, 16);
         document.getElementById('updRemoteMsg').innerText = rem.message || '';
 
         const badge = document.getElementById('versionBadge');
-        if (badge && loc.short_sha) {
-          badge.innerText = `#${loc.short_sha}`;
+        if (badge) {
+          badge.innerText = locLabel;
         }
 
         if (data.has_update) {
           if (notifyDot) notifyDot.classList.remove('hidden');
           statusBox.className = 'rounded-xl p-3.5 border text-xs space-y-1 bg-amber-50 border-amber-300 text-amber-950';
           statusBox.innerHTML = `
-            <div class="font-bold text-sm text-amber-900">🚀 Đã có bản cập nhật mới (#${rem.short_sha})!</div>
+            <div class="font-bold text-sm text-amber-900">🚀 Đã có bản cập nhật mới: ${remLabel}!</div>
             <div>Bấm nút <strong>"⬇️ Cập nhật ngay"</strong> bên dưới để tự động tải code mới và khởi động lại ứng dụng (Dữ liệu dự án & video của bạn được giữ nguyên 100%).</div>
           `;
           btnApply.classList.remove('hidden');
@@ -2389,7 +2398,7 @@
           if (notifyDot) notifyDot.classList.add('hidden');
           statusBox.className = 'rounded-xl p-3.5 border text-xs space-y-1 bg-emerald-50 border-emerald-200 text-emerald-900';
           statusBox.innerHTML = `
-            <div class="font-bold">✅ Bạn đang sử dụng phiên bản mới nhất (#${loc.short_sha})!</div>
+            <div class="font-bold">✅ Bạn đang sử dụng phiên bản mới nhất (${locLabel})!</div>
             <div>Mọi tính năng và bộ lọc khuôn mặt AI đã được đồng bộ với bản mới nhất trên GitHub.</div>
           `;
         }
@@ -2424,10 +2433,10 @@
           throw new Error(data.detail || 'Cập nhật thất bại');
         }
 
-        const targetSha = (data.new_version && data.new_version.short_sha) || '';
+        const targetVer = formatVerDisplay(data.new_version);
         statusBox.className = 'rounded-xl p-3.5 border text-xs space-y-1 bg-emerald-50 border-emerald-300 text-emerald-900';
         statusBox.innerHTML = `
-          <div class="font-bold">✔ Đã tải xong bản #${targetSha}! Đang khởi động lại máy chủ...</div>
+          <div class="font-bold">✔ Đã tải xong bản ${targetVer}! Đang khởi động lại máy chủ...</div>
           <div>Trang sẽ tự động làm mới sau khoảng 2–3 giây...</div>
         `;
 

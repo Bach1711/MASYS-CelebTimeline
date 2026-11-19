@@ -39,7 +39,7 @@ from renderer import render_final_timeline_video
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WORKSPACE_DIR = os.path.join(BASE_DIR, "workspace")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
-DEFAULT_OUTPUT_DIR = r"D:\TikTok_Videos\Output"
+DEFAULT_OUTPUT_DIR = r"D:\TikTok_Videos\Output" if os.path.exists("D:\\") else os.path.join(BASE_DIR, "output")
 FEEDBACK_FILE = os.path.join(BASE_DIR, "feedback.json")
 VERSION_FILE = os.path.join(BASE_DIR, "version.json")
 GITHUB_REPO = "Bach1711/MASYS-CelebTimeline"
@@ -704,6 +704,20 @@ def api_stop_all_pipelines():
     for pid in stopped_pids:
         _save_project_state(pid)
     _save_batches_state()
+
+    # Clean up dangling partial downloads (.part, .ytdl, *_temp*, *_tmp*) left behind when stopped mid-download
+    try:
+        for root_d, _, files_d in os.walk(WORKSPACE_DIR):
+            for fn in files_d:
+                low_fn = fn.lower()
+                if low_fn.endswith((".part", ".ytdl")) or "_temp" in low_fn or "_tmp" in low_fn:
+                    try:
+                        os.remove(os.path.join(root_d, fn))
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
     return {"ok": True, "stopped_projects": len(stopped_pids)}
 
 
@@ -2138,6 +2152,27 @@ class ApplyUpdateRequest(BaseModel):
 
 class PublishUpdateRequest(BaseModel):
     message: Optional[str] = None
+    version: Optional[str] = None
+
+
+def _normalize_ver_label(raw_ver: Optional[str], default: str = "ver 0.1") -> str:
+    s = (raw_ver or "").strip()
+    if not s:
+        return default
+    m = re.search(r"(\d+)\.(\d+)", s)
+    if m:
+        return f"ver {int(m.group(1))}.{int(m.group(2))}"
+    return s if s.lower().startswith("ver") else f"ver {s}"
+
+
+def _bump_ver_label(cur_ver: Optional[str]) -> str:
+    """Increment version in 0.1 steps: ver 0.1 -> ver 0.2 ... ver 0.9 -> ver 1.0 ... ver 3.4 -> ver 3.5."""
+    m = re.search(r"(\d+)\.(\d+)", cur_ver or "0.1")
+    if not m:
+        return "ver 0.1"
+    major, minor = int(m.group(1)), int(m.group(2))
+    total_tenths = major * 10 + minor + 1
+    return f"ver {total_tenths // 10}.{total_tenths % 10}"
 
 
 def _has_git_repo() -> bool:
@@ -2158,10 +2193,11 @@ def _run_git(args: List[str], timeout: int = 25) -> subprocess.CompletedProcess:
 
 def _get_local_version_info() -> Dict[str, Any]:
     """
-    Read current local version (commit SHA, message, date) from Git if available,
-    or from `version.json` if the app was copied to another PC without `.git`.
+    Read current local version (`ver X.Y`, commit SHA, message, date) from `version.json` and Git if available,
+    so both Git clones and ZIP copies display the exact `ver X.Y` label.
     """
     info: Dict[str, Any] = {
+        "version": "ver 0.1",
         "sha": "",
         "short_sha": "unknown",
         "message": "Bản cài đặt cục bộ",
@@ -2182,6 +2218,7 @@ def _get_local_version_info() -> Dict[str, Any]:
                 info.update({k: v for k, v in saved.items() if v})
         except Exception:
             pass
+    info["version"] = _normalize_ver_label(info.get("version"), default="ver 0.1")
 
     if _has_git_repo():
         info["has_git"] = True
@@ -2211,12 +2248,13 @@ def _get_local_version_info() -> Dict[str, Any]:
             if r_unpushed.returncode == 0 and r_unpushed.stdout.strip().isdigit():
                 info["unpushed_count"] = int(r_unpushed.stdout.strip())
 
-            # Keep version.json synced with current HEAD
+            # Keep version.json synced with current HEAD while preserving human-readable `ver X.Y`
             if info["sha"]:
                 try:
                     with open(VERSION_FILE, "w", encoding="utf-8") as f:
                         json.dump(
                             {
+                                "version": info["version"],
                                 "sha": info["sha"],
                                 "short_sha": info["short_sha"],
                                 "message": info["message"],
@@ -2243,6 +2281,7 @@ def _fetch_remote_github_info(local_sha: str = "") -> Dict[str, Any]:
     Works on ANY PC even if Git is not installed!
     """
     remote_info: Dict[str, Any] = {
+        "version": "",
         "sha": "",
         "short_sha": "",
         "message": "",
@@ -2254,6 +2293,11 @@ def _fetch_remote_github_info(local_sha: str = "") -> Dict[str, Any]:
     if _has_git_repo():
         try:
             _run_git(["fetch", "origin", GITHUB_BRANCH, "--quiet"], timeout=15)
+            r_v = _run_git(["show", f"origin/{GITHUB_BRANCH}:version.json"], timeout=5)
+            if r_v.returncode == 0 and r_v.stdout.strip():
+                rv_obj = json.loads(r_v.stdout)
+                if rv_obj.get("version"):
+                    remote_info["version"] = _normalize_ver_label(rv_obj["version"])
         except Exception:
             pass
 
@@ -2262,6 +2306,18 @@ def _fetch_remote_github_info(local_sha: str = "") -> Dict[str, Any]:
         "User-Agent": "MASYS-CelebTimeline-Updater/1.0",
     }
     try:
+        if not remote_info["version"]:
+            try:
+                rv_res = requests.get(
+                    f"https://raw.githubusercontent.com/{GITHUB_REPO}/{GITHUB_BRANCH}/version.json?t={int(time.time())}",
+                    timeout=8,
+                )
+                if rv_res.ok:
+                    rv_data = rv_res.json()
+                    if rv_data.get("version"):
+                        remote_info["version"] = _normalize_ver_label(rv_data["version"])
+            except Exception:
+                pass
         url = f"https://api.github.com/repos/{GITHUB_REPO}/commits/{GITHUB_BRANCH}"
         r = requests.get(url, headers=headers, timeout=10)
         if r.ok:
@@ -2495,7 +2551,7 @@ def api_update_apply(req: ApplyUpdateRequest):
             detail=f"Cập nhật thất bại: {'; '.join(error_details)}",
         )
 
-    # Install any updated Python dependencies silently
+    # Install any updated Python dependencies & keep yt-dlp fresh so YouTube downloads don't break
     req_file = os.path.join(BASE_DIR, "requirements.txt")
     if os.path.exists(req_file):
         try:
@@ -2507,9 +2563,19 @@ def api_update_apply(req: ApplyUpdateRequest):
             )
         except Exception:
             pass
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-U", "yt-dlp", "--quiet"],
+            cwd=BASE_DIR,
+            capture_output=True,
+            timeout=45,
+        )
+    except Exception:
+        pass
 
     # Save updated version.json
     new_version_data = {
+        "version": remote_info.get("version") or local_info.get("version") or "ver 0.1",
         "sha": remote_sha or local_info.get("sha", ""),
         "short_sha": (remote_sha[:7] if remote_sha else local_info.get("short_sha", "")),
         "message": remote_info.get("message") or local_info.get("message", ""),
@@ -2546,9 +2612,22 @@ def api_update_publish(req: PublishUpdateRequest):
         raise HTTPException(status_code=400, detail="Máy này không có Git repository (.git) để đẩy code.")
 
     commit_msg = (req.message or "").strip() or f"Update MASYS CelebTimeline ({time.strftime('%Y-%m-%d %H:%M')})"
+    cur_local = _get_local_version_info()
+    target_ver = _normalize_ver_label(req.version) if req.version else _bump_ver_label(cur_local.get("version"))
 
     try:
-        # Update version.json first and stage changes
+        # Update version.json with target_ver first
+        try:
+            cur_v_data = {}
+            if os.path.exists(VERSION_FILE):
+                with open(VERSION_FILE, "r", encoding="utf-8") as f:
+                    cur_v_data = json.load(f)
+            cur_v_data["version"] = target_ver
+            with open(VERSION_FILE, "w", encoding="utf-8") as f:
+                json.dump(cur_v_data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
         _run_git(["add", "-A"], timeout=15)
         r_st = _run_git(["status", "--porcelain"], timeout=10)
         if r_st.returncode == 0 and r_st.stdout.strip():
@@ -2556,15 +2635,21 @@ def api_update_publish(req: PublishUpdateRequest):
             if r_cm.returncode != 0 and "nothing to commit" not in (r_cm.stdout + r_cm.stderr).lower():
                 raise RuntimeError(r_cm.stderr or r_cm.stdout)
 
+        # Refresh version.json with the new commit SHA while preserving target_ver
+        new_local = _get_local_version_info()
+        if new_local.get("sha"):
+            _run_git(["add", "version.json"], timeout=10)
+            _run_git(["commit", "--amend", "--no-edit"], timeout=15)
+            new_local = _get_local_version_info()
+
         r_push = _run_git(["push", "origin", GITHUB_BRANCH], timeout=45)
         if r_push.returncode != 0:
             raise RuntimeError(r_push.stderr or r_push.stdout)
 
-        new_local = _get_local_version_info()
         return {
             "ok": True,
             "published_version": new_local,
-            "message": f"Đã đẩy bản cập nhật #{new_local['short_sha']} lên GitHub ({GITHUB_REPO}) thành công! Các máy khác đã có thể bấm Cập nhật ngay.",
+            "message": f"Đã đẩy bản cập nhật {new_local.get('version')} (#{new_local['short_sha']}) lên GitHub ({GITHUB_REPO}) thành công! Các máy khác đã có thể bấm Cập nhật ngay.",
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Không thể đẩy bản cập nhật lên GitHub: {e}")
