@@ -1767,7 +1767,7 @@
         newsCard.className = 'bg-white border-2 border-rose-300 rounded-xl p-3 shadow-xs flex flex-col justify-between space-y-2';
         grid.appendChild(newsCard);
       }
-      renderNewsCard(newsCard, proj.news_clip);
+      renderNewsCard(newsCard, proj.news_clip, proj.celeb_info);
 
       // Count occurrences of each year to display Scene 1 / Scene 2 badge when 1 year has 2 consecutive scenes
       const yearClips = proj.year_clips || [];
@@ -1801,9 +1801,15 @@
       }
     }
 
-    function renderNewsCard(cardEl, nc) {
+    function renderNewsCard(cardEl, nc, celebInfo) {
       if (!nc) return;
-      const sig = `${nc.status}_${nc.clip_url || ''}_${nc.start_sec || 0}_${nc.duration_sec || 0}`;
+      const cNameRaw = (celebInfo && celebInfo.name) ? String(celebInfo.name) : '';
+      const cNameClean = cNameRaw.replace(/\s*\([^)]*\)\s*/g, ' ').trim() || cNameRaw;
+      const by = (celebInfo && celebInfo.birth_year) ? String(celebInfo.birth_year) : '';
+      const dy = (celebInfo && celebInfo.death_year) ? String(celebInfo.death_year) : '';
+      const yearsLabel = (by && dy) ? `(${by}-${dy})` : (by ? `(${by})` : '');
+
+      const sig = `${nc.status}_${nc.clip_url || ''}_${nc.start_sec || 0}_${nc.duration_sec || 0}_${cNameClean}_${yearsLabel}`;
       if (cardEl.getAttribute('data-sig') === sig) return;
       cardEl.setAttribute('data-sig', sig);
 
@@ -1811,6 +1817,19 @@
       const dur = isCleared ? '0.0' : Number(nc.duration_sec || 11.5).toFixed(1);
       const timeRange = isCleared ? 'Đã xóa bản tin' : formatRange(nc.start_sec || 0, nc.duration_sec || 11.5);
       const titleText = nc.title || 'Bản tin mở đầu thông báo về nhân vật';
+
+      const headerOverlayHtml = (!isCleared && cNameClean) ? `
+        <div class="relative z-10 text-center pointer-events-none leading-tight mt-0.5">
+          <div class="font-black text-sm tracking-tight" style="color:#FFE600; text-shadow: -1.5px -1.5px 0 #000, 1.5px -1.5px 0 #000, -1.5px 1.5px 0 #000, 1.5px 1.5px 0 #000, 0 2px 4px rgba(0,0,0,0.85);">
+            ${cNameClean}
+          </div>
+          ${yearsLabel ? `
+            <div class="font-extrabold text-[11px] text-white" style="text-shadow: -1.2px -1.2px 0 #000, 1.2px -1.2px 0 #000, -1.2px 1.2px 0 #000, 1.2px 1.2px 0 #000, 0 2px 3px rgba(0,0,0,0.85);">
+              ${yearsLabel}
+            </div>
+          ` : ''}
+        </div>
+      ` : '';
 
       let mediaHtml = '';
       if (nc.status === 'ready' && nc.clip_url) {
@@ -1853,6 +1872,7 @@
               <span class="px-2 py-0.5 rounded bg-rose-600 text-white font-bold text-[11px] shadow-xs">📺 BẢN TIN MỞ ĐẦU</span>
               <span class="px-2 py-0.5 rounded bg-white/90 text-slate-900 font-bold text-[11px] shadow-xs">${dur}s</span>
             </div>
+            ${headerOverlayHtml}
           </div>
 
           <div class="flex items-center justify-between text-[11px] px-0.5">

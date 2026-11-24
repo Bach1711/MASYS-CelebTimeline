@@ -2044,6 +2044,7 @@ def _render_project_internal(
         output_path=output_path,
         work_dir=pdir,
         layout=layout,
+        celeb_info=celeb,
     )
     res["output_folder"] = target_folder
 

@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MASYS CelebTimeline — Kiến trúc Auto-Update & Công nghệ lõi</title>
+  <link rel="icon" type="image/x-icon" href="static/logo.ico" />
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <style>
+    :root {
+      --bg: #0b1120;
+      --surface: #111827;
+      --surface-2: #1e293b;
+      --border: #334155;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --gold: #fbbf24;
+      --blue: #60a5fa;
+      --emerald: #34d399;
+      --rose: #fb7185;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: radial-gradient(circle at top right, #172554 0%, var(--bg) 55%);
+      color: var(--text);
+      line-height: 1.65;
+      padding: 32px 18px 64px;
+    }
+    .container {
+      max-width: 1120px;
+      margin: 0 auto;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      background: rgba(17, 24, 39, 0.85);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 22px 26px;
+      margin-bottom: 24px;
+      backdrop-filter: blur(8px);
+    }
+    header img {
+      width: 60px;
+      height: 60px;
+      border-radius: 14px;
+      flex-shrink: 0;
+    }
+    h1 {
+      margin: 0 0 4px;
+      font-size: 1.5rem;
+      color: #fff;
+    }
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+    .badge {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      background: rgba(251, 191, 36, 0.16);
+      color: var(--gold);
+      border: 1px solid rgba(251, 191, 36, 0.4);
+      margin-left: 8px;
+      vertical-align: middle;
+    }
+    section.card {
+      background: rgba(17, 24, 39, 0.9);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 24px 26px;
+      margin-bottom: 22px;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+    }
+    h2 {
+      margin: 0 0 14px;
+      font-size: 1.2rem;
+      color: var(--gold);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    h3 {
+      margin: 16px 0 8px;
+      font-size: 1.02rem;
+      color: #f8fafc;
+    }
+    .diagram-wrap {
+      background: #0f172a;
+      border: 1px solid #293548;
+      border-radius: 14px;
+      padding: 18px;
+      overflow-x: auto;
+    }
+    .mermaid {
+      display: flex;
+      justify-content: center;
+    }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 16px;
+    }
+    .box {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px 18px;
+    }
+    .box strong { color: #fff; }
+    ul {
+      margin: 8px 0 0;
+      padding-left: 20px;
+      color: #cbd5e1;
+    }
+    li { margin-bottom: 6px; }
+    code {
+      font-family: Consolas, 'Courier New', monospace;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid #334155;
+      color: #93c5fd;
+      padding: 1px 6px;
+      border-radius: 6px;
+      font-size: 0.88em;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+      font-size: 0.93rem;
+    }
+    th, td {
+      border: 1px solid var(--border);
+      padding: 12px 14px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: #1e293b;
+      color: var(--gold);
+      font-weight: 700;
+    }
+    tr:nth-child(even) td {
+      background: rgba(30, 41, 59, 0.35);
+    }
+    .tag-core { color: var(--emerald); font-weight: 700; }
+    .tag-warn { color: var(--rose); font-weight: 700; }
+    .note {
+      margin-top: 14px;
+      padding: 12px 16px;
+      border-left: 4px solid var(--blue);
+      background: rgba(59, 130, 246, 0.1);
+      border-radius: 8px;
+      font-size: 0.92rem;
+      color: #dbeafe;
+    }
+    .offline-hint {
+      display: none;
+      margin-top: 10px;
+      color: var(--rose);
+      font-size: 0.85rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <img src="static/logo.png" alt="MASYS CelebTimeline" onerror="this.style.display='none'" />
+      <div>
+        <h1>Kiến trúc 1-Click Auto-Update &amp; Chiến lược Công nghệ lõi <span class="badge">ver 0.1</span></h1>
+        <p class="subtitle">Mô hình <strong>Vỏ Tĩnh + Lõi Động (Static Shell &amp; Hot-Swap Core)</strong> — Bạn kiểm soát kho lõi, người dùng cuối chỉ cầm tool EXE.</p>
+      </div>
+    </header>
+
+    <!-- 1. System Architecture Diagram -->
+    <section class="card">
+      <h2>1. Sơ đồ Kiến trúc Tổng thể (System Architecture Diagram)</h2>
+      <div class="diagram-wrap">
+        <pre class="mermaid">
+flowchart LR
+    subgraph OWNER["1. Máy Dev của Bạn (Nắm Công Nghệ Lõi)"]
+        DEV["Chỉnh sửa Lõi: app.py, face_engine.py, celeb_service.py, static/"]
+        PUB["publish_update.bat / git push"]
+        DEV --> PUB
+    end
+
+    subgraph CLOUD["2. Kho Phân Phối (GitHub: Bach1711/MASYS-CelebTimeline)"]
+        API["GitHub REST API &amp; raw version.json"]
+        ZIP["Gói Source ZIP (nhánh main, ~vài trăm KB)"]
+    end
+
+    subgraph CLIENT["3. Máy Người Dùng (Chỉ Cầm Tool EXE)"]
+        EXE["Vỏ Tĩnh: MASYS-CelebTimeline.exe + _internal/ + bin/ffmpeg + models/"]
+        HOT["Lõi Động trên ổ đĩa: *.py, static/, version.json"]
+        USERDATA["Dữ liệu giữ nguyên: workspace/, output/, cookies.txt"]
+        UI["Trình duyệt Web UI (127.0.0.1:8765)"]
+
+        EXE -->|"launcher.py nạp động lúc mở"| HOT
+        UI &lt;--&gt;|"Kiểm tra &amp; Kích hoạt Update"| HOT
+    end
+
+    PUB -->|"git push origin main"| CLOUD
+    HOT -->|"GET /api/update/check"| API
+    ZIP -->|"POST /api/update/apply (chép đè Lõi, giữ Vỏ &amp; Data)"| HOT
+        </pre>
+      </div>
+      <div id="mermaidFallback" class="offline-hint">Không tải được thư viện Mermaid CDN (mất mạng) — vui lòng xem nội dung chi tiết ở các mục bên dưới.</div>
+    </section>
+
+    <!-- 2. Sequence Diagram -->
+    <section class="card">
+      <h2>2. Luồng chạy từng bước khi bấm Cập nhật (Sequence Flow)</h2>
+      <div class="diagram-wrap">
+        <pre class="mermaid">
+sequenceDiagram
+    participant U as Trình duyệt (User)
+    participant S as App Server (app.py)
+    participant G as GitHub (origin/main)
+    participant OS as Windows CMD
+
+    U->>S: GET /api/update/check
+    S->>S: Đọc version.json trên máy (local_sha)
+    S->>G: Hỏi commit mới nhất + raw version.json (remote_sha)
+    G-->>S: Trả SHA mới + danh sách commits thay đổi
+    S-->>U: Nếu remote_sha != local_sha -> Bật chấm đỏ thông báo
+
+    U->>S: POST /api/update/apply (User bấm "Cập nhật ngay")
+    alt Máy Dev có .git
+        S->>G: git fetch origin main &amp; git reset --hard origin/main
+    else Máy User chỉ có bản EXE (không cần cài Git)
+        S->>G: Tải archive ZIP từ codeload.github.com
+        S->>S: Giải nén đè *.py, static/ (Bỏ qua preserve_names)
+    end
+    S->>S: Ghi remote_sha mới vào version.json
+    S->>OS: Spawn lệnh chờ 2s -> mở lại MASYS-CelebTimeline.exe
+    S-->>U: Trả ok=true -> UI đếm ngược rồi tự F5
+    S->>S: os._exit(0) (Tắt tiến trình cũ nhả cổng 8765)
+    OS->>EXE: Khởi động lại EXE -> Nạp code *.py mới
+        </pre>
+      </div>
+    </section>
+
+    <!-- 3. Code Mechanics -->
+    <section class="card">
+      <h2>3. Cơ chế kỹ thuật bên trong mã nguồn hiện tại</h2>
+      <div class="grid-2">
+        <div class="box">
+          <h3>📦 Tách Vỏ &amp; Lõi (<code>build_exe.bat</code> + <code>launcher.py</code>)</h3>
+          <ul>
+            <li><strong>Vỏ tĩnh (~675 MB):</strong> PyInstaller gom Python 3.14, FastAPI, OpenCV, yt-dlp, FFmpeg vào <code>_internal/</code> và <code>bin/</code>. Cờ <code>--exclude-module</code> loại các file <code>*.py</code> của app ra khỏi file đóng gói.</li>
+            <li><strong>Lõi động:</strong> Khi mở <code>MASYS-CelebTimeline.exe</code>, <code>launcher.py</code> gọi <code>importlib.import_module("app")</code> để nạp trực tiếp code nằm cạnh file EXE.</li>
+          </ul>
+        </div>
+        <div class="box">
+          <h3>🔍 So khớp phiên bản (<code>/api/update/check</code>)</h3>
+          <ul>
+            <li><code>_get_local_version_info()</code> đọc <code>version.json</code> (hoặc <code>git rev-parse HEAD</code> trên máy dev) để lấy <code>local_sha</code>.</li>
+            <li><code>_fetch_remote_github_info()</code> gọi GitHub REST API lấy <code>remote_sha</code>, so sánh commit qua <code>/compare/{local}...{remote}</code> để dựng changelog.</li>
+          </ul>
+        </div>
+        <div class="box">
+          <h3>⬇️ Ghi đè thông minh (<code>/api/update/apply</code>)</h3>
+          <ul>
+            <li>Máy không có Git tự động tải gói ZIP nhánh <code>main</code> từ <code>codeload.github.com</code> (~vài trăm KB).</li>
+            <li>Giữ nguyên danh mục <code>preserve_names</code>: <code>workspace</code>, <code>output</code>, <code>bin</code>, <code>_internal</code>, <code>MASYS-CelebTimeline.exe</code>, <code>feedback.json</code>, <code>cookies.txt</code>.</li>
+          </ul>
+        </div>
+        <div class="box">
+          <h3>♻️ Tự khởi động lại (<code>_schedule_server_restart</code>)</h3>
+          <ul>
+            <li>Cập nhật <code>version.json</code> bằng <code>remote_sha</code> mới nhất.</li>
+            <li>Chạy ngầm lệnh Windows <code>timeout /t 2 &amp; start "" "...MASYS-CelebTimeline.exe" --no-browser</code> rồi gọi <code>os._exit(0)</code> để nhả cổng <code>8765</code> và nạp code mới tức thì.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. Protect Core IP -->
+    <section class="card">
+      <h2>4. Lộ trình khóa chặt: "Bạn cầm công nghệ lõi — Người khác chỉ cầm tool"</h2>
+      <p>Hiện tại ở bản MVP <code>ver 0.1</code>, kho GitHub đang để <strong>Public</strong> để tải ZIP nhanh không cần xác thực, và file <code>.py</code> nằm dạng văn bản đọc được cạnh file EXE. Khi muốn thương mại hóa hoặc bảo mật thuật toán, bạn có thể nâng cấp theo 3 cấp:</p>
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 20%;">Cấp độ</th>
+            <th style="width: 42%;">Cách triển khai trên kiến trúc hiện có</th>
+            <th style="width: 38%;">Người dùng cuối nhìn thấy gì?</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Cấp 1</strong><br><span class="tag-core">Khóa nguồn tải</span></td>
+            <td>Chuyển repo GitHub sang <strong>Private</strong>. Dựng 1 API Server trung gian (Cloudflare Worker / VPS) kiểm tra <strong>License Key + HWID</strong> rồi mới cấp link tải gói update.</td>
+            <td>Chỉ máy có bản quyền mới kiểm tra &amp; tải được bản mới. Không ai tự clone được repo của bạn.</td>
+          </tr>
+          <tr>
+            <td><strong>Cấp 2</strong><br><span class="tag-core">Mã hóa lõi (.pyd)</span></td>
+            <td>Dùng <strong>Cython</strong> hoặc <strong>Nuitka</strong> biên dịch <code>app.py</code>, <code>face_engine.py</code>, <code>celeb_service.py</code> thành file nhị phân DLL <code>.pyd</code> trước khi nén ZIP update. <code>launcher.py</code> vẫn <code>import app</code> chạy bình thường.</td>
+            <td>Mở thư mục EXE chỉ thấy các file nhị phân <code>.pyd</code>, <strong>không đọc được mã nguồn Python</strong>.</td>
+          </tr>
+          <tr>
+            <td><strong>Cấp 3</strong><br><span class="tag-warn">Tách "Não" lên Cloud</span></td>
+            <td>Tool trên máy khách chỉ lo tác vụ nặng băng thông/CPU (tải YouTube, FFmpeg render). Toàn bộ logic AI tìm timeline, chấm điểm, prompt &amp; API Key chạy trên Server riêng của bạn.</td>
+            <td>Kể cả dịch ngược được EXE cũng không lấy được công nghệ lõi; dễ dàng bán gói theo tháng / lượt chạy.</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="note">
+        <strong>Mẹo thực tế:</strong> Kết hợp <strong>Cấp 1 + Cấp 2</strong> là điểm cân bằng tối ưu cho app desktop bán lẻ: bạn không tốn chi phí server xử lý video nặng, vẫn giữ được cơ chế Auto-Update gọn nhẹ, đồng thời bảo vệ hoàn toàn thuật toán bên trong.
+      </div>
+    </section>
+  </div>
+
+  <script>
+    if (window.mermaid) {
+      mermaid.initialize({ startOnLoad: true, theme: 'dark', securityLevel: 'loose' });
+    } else {
+      document.getElementById('mermaidFallback').style.display = 'block';
+    }
+  </script>
+</body>
+</html>

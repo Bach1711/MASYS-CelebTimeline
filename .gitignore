@@ -14,3 +14,4 @@ dist/
 *.spec
 MASYS-CelebTimeline_EXE/
 Gemini_Generated_Image_*.png
+*.mp4

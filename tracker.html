@@ -60,7 +60,7 @@
           <span id="statTodo" class="px-3 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-300">Todo: 0</span>
           <span id="statInProgress" class="px-3 py-1 rounded-full bg-blue-100 text-blue-800 border border-blue-200">In Progress: 0</span>
           <span id="statReview" class="px-3 py-1 rounded-full bg-amber-100 text-amber-800 border border-amber-200">Review: 0</span>
-          <span id="statDone" class="px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">Done: 8</span>
+          <span id="statDone" class="px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">Done: 15</span>
         </div>
       </div>
 
@@ -68,7 +68,7 @@
         <div id="overallProgressBar" class="bg-emerald-500 h-full transition-all duration-300" style="width: 100%"></div>
       </div>
       <div class="flex justify-between text-xs text-slate-600 font-semibold">
-        <span id="overallProgressLabel">Hoàn thành: 100% (8/8 Tickets)</span>
+        <span id="overallProgressLabel">Hoàn thành: 100% (15/15 Tickets)</span>
         <span>Chuẩn nghiệm thu: Khung dọc 9:16 (1080×1920) • Giữ tiếng bản tin đầu • Tắt tiếng các năm</span>
       </div>
     </div>
@@ -256,6 +256,62 @@
           "Tự động quét và điều chỉnh dãy mốc năm theo những năm thực sự có video của nhân vật trên YouTube, loại bỏ các ô lỗi trống (Fix lỗi Patrick Stewart).",
           "Chặn các trang phụ Wikipedia có đuôi 'on stage and screen', 'disambiguation', 'filmography', 'discography'.",
           "Nút ⏹️ Dừng Chạy dừng ngay lập tức mọi tiến trình tìm & cắt video đang chạy (hủy luôn các tiến trình con yt-dlp / ffmpeg) và giữ nguyên các cảnh đã cắt xong."
+        ]
+      },
+      {
+        id: "CON-213",
+        url: "https://linear.app/conducdaudan/issue/CON-213/swap-scene-and-persistence-sua-djoi-canh-deep-scan-dja-djo-tuoi-chinh",
+        title: "[Swap Scene & Persistence] Sửa Đổi cảnh (Deep-scan đa độ tuổi), Chỉnh giây, Thêm/Xóa cảnh & Load Project từ ổ đĩa",
+        priority: "High",
+        status: "Done",
+        module: "app.py, youtube_pipeline.py, static/index.html",
+        description: "Sửa nút Đổi cảnh (next_segment) trong cùng video với deep-scan toàn video bằng tham chiếu khuôn mặt đa độ tuổi; sửa Chỉnh giây, Thêm cảnh, Xóa cảnh và đảm bảo nạp lại các project đã lưu từ ổ đĩa.",
+        dod: [
+          "Nút ✨ Đổi cảnh quét sâu toàn video với tham chiếu khuôn mặt đa độ tuổi (multi-age project face references) để tìm đoạn thay thế chính xác.",
+          "Các thao tác ✂️ Chỉnh giây, Thêm cảnh, Xóa cảnh hoạt động ổn định và đồng bộ với Storyboard.",
+          "Project đã lưu trong workspace/ được nạp lại chính xác từ ổ đĩa."
+        ]
+      },
+      {
+        id: "CON-214",
+        url: "https://linear.app/conducdaudan/issue/CON-214/release-v01-mvp-chuan-hoa-version-yt-dlp-auto-upgrade-cookiestxt-d",
+        title: "[Release v0.1 MVP] Chuẩn hóa Version, yt-dlp auto-upgrade, cookies.txt, D: drive fallback & Dọn file tải dở",
+        priority: "High",
+        status: "Done",
+        module: "app.py, youtube_pipeline.py, publish_update.bat, version.json, static/index.html",
+        description: "Chuẩn hóa bản phát hành chính thức ver 0.1 MVP (version.json), tự động nâng cấp yt-dlp, hỗ trợ cookies.txt, fallback sang ổ D: và tự động dọn dẹp các file tải dở.",
+        dod: [
+          "Nhãn phiên bản ngữ nghĩa được chuẩn hóa trong version.json (ver 0.1) và hiển thị đồng nhất trên UI.",
+          "Tự động nâng cấp yt-dlp và hỗ trợ cookies.txt khi tải video YouTube.",
+          "Hỗ trợ fallback sang ổ D: và tự động dọn dẹp các file tải dở (partial-download cleanup)."
+        ]
+      },
+      {
+        id: "CON-215",
+        url: "https://linear.app/conducdaudan/issue/CON-215/portable-exe-and-branding-djong-goi-pyinstaller-exe-vo-tinh-loi-djong",
+        title: "[Portable EXE & Branding] Đóng gói PyInstaller EXE (Vỏ Tĩnh + Lõi Động), Logo/Icon thương hiệu & Tài liệu Auto-Update",
+        priority: "High",
+        status: "Done",
+        module: "launcher.py, build_exe.bat, face_engine.py, static/logo.ico, static/brand_logo.png, AUTO_UPDATE_ARCHITECTURE.md",
+        description: "Đóng gói Portable PyInstaller EXE (MASYS-CelebTimeline_EXE) theo mô hình Vỏ Tĩnh + Lõi Động hỗ trợ 1-Click Update, áp dụng Logo/Icon thương hiệu và hoàn thiện tài liệu kiến trúc Auto-Update.",
+        dod: [
+          "launcher.py và build_exe.bat đóng gói thành công MASYS-CelebTimeline_EXE tách Vỏ Tĩnh và Lõi Động, hỗ trợ 1-Click Auto-Update.",
+          "Áp dụng bộ icon & logo thương hiệu (static/logo.ico, static/logo.png, static/brand_logo.png) cho EXE và Web UI.",
+          "Hoàn thiện tài liệu kiến trúc Auto-Update (AUTO_UPDATE_ARCHITECTURE.md & auto_update_architecture.html)."
+        ]
+      },
+      {
+        id: "CON-216",
+        url: "https://linear.app/conducdaudan/issue/CON-216/renderer-and-ui-ghep-chu-ten-nhan-vat-vang-and-nam-sinh-mat-trang-o",
+        title: "[Renderer & UI] Ghép chữ Tên Nhân Vật (Vàng) & Năm Sinh-Mất (Trắng) ở phần trên cảnh Bản tin mở đầu chuẩn mẫu 305 Fred Rogers",
+        priority: "Urgent",
+        status: "Done",
+        module: "renderer.py, app.py, static/index.html",
+        description: "Ghép tiêu đề nhân vật 2 dòng chuẩn mẫu 305 Fred Rogers.mp4 lên phần nền đen phía trên khung hình của cảnh Bản tin mở đầu (kéo dài suốt cảnh bản tin): Dòng 1 Tên nhân vật màu vàng (#FFE600) viền đen (~90pt), Dòng 2 (Năm sinh-Năm mất) màu trắng (#FFFFFF) viền đen (~66pt), đồng bộ trên cả file MP4 xuất ra và ô xem trước Storyboard.",
+        dod: [
+          "Dòng 1 (Tên nhân vật) hiển thị màu vàng (#FFE600) viền đen đậm (~90pt, tự co giãn nếu tên dài), căn giữa phía trên khung hình video.",
+          "Dòng 2 ((Năm sinh-Năm mất)) hiển thị màu trắng (#FFFFFF) viền đen đậm (~66pt), căn giữa ngay dưới dòng tên và cách mép trên khung video ~34px.",
+          "Kéo dài xuyên suốt toàn bộ thời lượng cảnh Bản tin mở đầu và đồng bộ xem trước trên ô 📺 BẢN TIN MỞ ĐẦU của Storyboard."
         ]
       }
     ];

@@ -1,9 +1,9 @@
 {
-  "version": "ver 0.1",
-  "sha": "f701ed53dc8f2c3e33d655152ce1bd66247a55d3",
-  "short_sha": "f701ed5",
-  "message": "feat(brand): apply MASYS CelebTimeline app icon & brand logo (ver 0.2)",
-  "date": "2026-11-19 15:35:53 +0700",
+  "version": "ver 0.2",
+  "sha": "ed1bff77f6cda9a0ada154f695edd40ce3e2d315",
+  "short_sha": "ed1bff7",
+  "message": "Release ver 0.2",
+  "date": "2026-11-24 16:07:51 +0700",
   "author": "BachVu",
   "repo": "Bach1711/MASYS-CelebTimeline",
   "branch": "main"
