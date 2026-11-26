@@ -29,6 +29,6 @@ git push origin main
 echo.
 echo ========================================================
 echo   HOAN TAT (%INPUT_VER%)! Cac may khac chi can bam
-echo   "Kiem tra Update" -> "Cap nhat ngay" tren giao dien.
+echo   "Kiem tra Update" ^-> "Cap nhat ngay" tren giao dien.
 echo ========================================================
 pause

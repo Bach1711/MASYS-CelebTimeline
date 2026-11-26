@@ -1,9 +1,9 @@
 {
-  "version": "ver 0.2",
-  "sha": "ed1bff77f6cda9a0ada154f695edd40ce3e2d315",
-  "short_sha": "ed1bff7",
-  "message": "Release ver 0.2",
-  "date": "2026-11-24 16:07:51 +0700",
+  "version": "ver 0.3",
+  "sha": "b00d13e71b2f47fb3543328ae991c2abd9005ca7",
+  "short_sha": "b00d13e",
+  "message": "fix(CON-224): thread-safe FaceEngine, atomic state save & safeReadJson for concurrent swap-year (ver 0.3)",
+  "date": "2026-11-26 10:16:10 +0700",
   "author": "BachVu",
   "repo": "Bach1711/MASYS-CelebTimeline",
   "branch": "main"

@@ -1941,6 +1941,9 @@
     }
 
     function renderYearCard(cardEl, yc, slotIdx, sceneLabel, totalYearClips) {
+      if (currentProjectId && typeof activeSwappingSlots !== 'undefined' && activeSwappingSlots.has(`${currentProjectId}_${slotIdx}`)) {
+        return;
+      }
       const sig = `${slotIdx}_${yc.year}_${sceneLabel}_${totalYearClips}_${yc.status}_${yc.clip_url || ''}_${yc.start_sec || 0}_${yc.duration_sec || 0}_${yc.face_similarity || 0}`;
       if (cardEl.getAttribute('data-sig') === sig) return;
       cardEl.setAttribute('data-sig', sig);
@@ -2068,6 +2071,22 @@
       `;
     }
 
+    const activeSwappingSlots = new Set();
+
+    async function safeReadJson(res) {
+      const rawText = await res.text();
+      if (!rawText) return {};
+      try {
+        return JSON.parse(rawText);
+      } catch (_err) {
+        return {
+          detail: rawText.length > 220
+            ? `Lỗi phản hồi từ máy chủ (HTTP ${res.status}): ${rawText.slice(0, 220)}...`
+            : `Lỗi phản hồi từ máy chủ (HTTP ${res.status}): ${rawText}`
+        };
+      }
+    }
+
     function toggleDrawer(id) {
       const el = document.getElementById(id);
       if (el) el.classList.toggle('hidden');
@@ -2086,9 +2105,11 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({})
         });
-        const proj = await res.json();
+        const proj = await safeReadJson(res);
         if (res.ok) renderStoryboard(proj);
         else alert(proj.detail || 'Không thể đổi bản tin');
+      } catch (e) {
+        alert('Lỗi khi đổi bản tin: ' + e.message);
       } finally {
         if (card) card.classList.remove('opacity-50', 'pointer-events-none');
       }
@@ -2116,9 +2137,11 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'clear' })
         });
-        const proj = await res.json();
+        const proj = await safeReadJson(res);
         if (res.ok) renderStoryboard(proj);
         else alert(proj.detail || 'Không thể xóa bản tin');
+      } catch (e) {
+        alert('Lỗi khi xóa bản tin: ' + e.message);
       } finally {
         if (card) card.classList.remove('opacity-50', 'pointer-events-none');
       }
@@ -2142,9 +2165,11 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
-        const proj = await res.json();
+        const proj = await safeReadJson(res);
         if (res.ok) renderStoryboard(proj);
         else alert(proj.detail || 'Không thể chỉnh giây bản tin');
+      } catch (e) {
+        alert('Lỗi khi chỉnh giây bản tin: ' + e.message);
       } finally {
         if (card) card.classList.remove('opacity-50', 'pointer-events-none');
       }
@@ -2197,6 +2222,12 @@
         alert('Hãy bấm "1. Tạo Video (Tìm & Cắt)" trước!');
         return;
       }
+      const slotKey = `${currentProjectId}_${slot_index}`;
+      if (activeSwappingSlots.has(slotKey)) {
+        return;
+      }
+      activeSwappingSlots.add(slotKey);
+
       const card = document.getElementById(`card-year-slot-${slot_index}`);
       let segBtn = null;
       let oldSegHtml = '';
@@ -2208,6 +2239,12 @@
             oldSegHtml = segBtn.innerHTML;
             segBtn.innerHTML = '⏳ Quét mặt...';
           }
+        } else if (payload && payload.action === 'next_video') {
+          segBtn = card.querySelector('button[onclick^="swapYearVideo"]');
+          if (segBtn) {
+            oldSegHtml = segBtn.innerHTML;
+            segBtn.innerHTML = '⏳ Đổi video...';
+          }
         }
       }
       try {
@@ -2216,18 +2253,21 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
-        const proj = await res.json();
-        if (res.ok) {
+        const proj = await safeReadJson(res);
+        if (res.ok && proj && proj.project_id) {
+          activeSwappingSlots.delete(slotKey);
           renderStoryboard(proj);
           saveUiState();
         } else {
-          alert(proj.detail || `Lỗi khi xử lý cảnh năm ${year}`);
+          alert((proj && proj.detail) ? proj.detail : `Lỗi khi xử lý cảnh năm ${year}`);
         }
       } catch (e) {
-        alert('Lỗi kết nối: ' + e.message);
+        alert(`Không thể xử lý cảnh năm ${year}: ${e.message}`);
       } finally {
-        if (segBtn && oldSegHtml) segBtn.innerHTML = oldSegHtml;
-        if (card) card.classList.remove('opacity-60', 'pointer-events-none');
+        activeSwappingSlots.delete(slotKey);
+        const liveCard = document.getElementById(`card-year-slot-${slot_index}`);
+        if (segBtn && oldSegHtml && segBtn.isConnected) segBtn.innerHTML = oldSegHtml;
+        if (liveCard) liveCard.classList.remove('opacity-60', 'pointer-events-none');
       }
     }
 
@@ -2258,7 +2298,7 @@
             layout: 'center_band'
           })
         });
-        const proj = await res.json();
+        const proj = await safeReadJson(res);
         if (!res.ok) {
           throw new Error(proj.detail || 'Lỗi khi xuất file MP4');
         }

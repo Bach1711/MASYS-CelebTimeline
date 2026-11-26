@@ -423,7 +423,8 @@ def download_youtube_section(
         if is_pipeline_cancelled():
             raise RuntimeError("PIPELINE_CANCELLED")
 
-    temp_base = output_path.replace(".mp4", "_temp")
+    uniq_tag = f"{threading.get_ident()}_{int(time.time() * 1000) % 1000000}"
+    temp_base = output_path.replace(".mp4", f"_temp_{uniq_tag}")
     ydl_opts = _attach_cookies_opt({
         "format": fmt,
         "outtmpl": temp_base + ".%(ext)s",
@@ -444,21 +445,38 @@ def download_youtube_section(
             cand = temp_base + ext
             if os.path.exists(cand) and os.path.getsize(cand) > 5000:
                 if ext == ".mp4":
-                    shutil.move(cand, output_path)
+                    try:
+                        os.replace(cand, output_path)
+                    except PermissionError:
+                        if not (os.path.exists(output_path) and os.path.getsize(output_path) > 5000):
+                            shutil.copy2(cand, output_path)
+                        try:
+                            os.remove(cand)
+                        except Exception:
+                            pass
                 else:
                     cut_video_clip(cand, output_path, 0, duration_sec, keep_audio=with_audio)
-                    os.remove(cand)
+                    try:
+                        os.remove(cand)
+                    except Exception:
+                        pass
                 return True
     except Exception as e:
         if "PIPELINE_CANCELLED" in str(e) or is_pipeline_cancelled():
             raise RuntimeError("PIPELINE_CANCELLED")
+    finally:
+        for p_tmp in glob.glob(temp_base + "*"):
+            try:
+                os.remove(p_tmp)
+            except Exception:
+                pass
 
     if is_pipeline_cancelled():
         raise RuntimeError("PIPELINE_CANCELLED")
 
     # Fallback: download without range if video is under 6 minutes, then trim with ffmpeg
     try:
-        ydl_opts_full = {
+        ydl_opts_full = _attach_cookies_opt({
             "format": fmt,
             "outtmpl": temp_base + "_full.%(ext)s",
             "quiet": True,
@@ -466,7 +484,7 @@ def download_youtube_section(
             "merge_output_format": "mp4",
             "ffmpeg_location": os.path.dirname(FFMPEG_BIN),
             "progress_hooks": [_cancel_hook],
-        }
+        })
         with yt_dlp.YoutubeDL(ydl_opts_full) as ydl:
             ydl.download([url])
         for ext in [".mp4", ".mkv", ".webm"]:
@@ -481,6 +499,12 @@ def download_youtube_section(
     except Exception as e:
         if "PIPELINE_CANCELLED" in str(e) or is_pipeline_cancelled():
             raise RuntimeError("PIPELINE_CANCELLED")
+    finally:
+        for p_tmp in glob.glob(temp_base + "_full*"):
+            try:
+                os.remove(p_tmp)
+            except Exception:
+                pass
 
     return False
 
@@ -510,7 +534,8 @@ def download_full_youtube_video(
         if is_pipeline_cancelled():
             raise RuntimeError("PIPELINE_CANCELLED")
 
-    temp_base = output_path.replace(".mp4", "_tmp")
+    uniq_tag = f"{threading.get_ident()}_{int(time.time() * 1000) % 1000000}"
+    temp_base = output_path.replace(".mp4", f"_tmp_{uniq_tag}")
     ydl_opts = _attach_cookies_opt({
         "format": f"bestvideo[height<={max_height}][ext=mp4]/best[height<={max_height}][ext=mp4]/best[height<=720][ext=mp4]/best",
         "outtmpl": temp_base + ".%(ext)s",
@@ -527,7 +552,15 @@ def download_full_youtube_video(
             cand = temp_base + ext
             if os.path.exists(cand) and os.path.getsize(cand) > 10000:
                 if ext == ".mp4":
-                    shutil.move(cand, output_path)
+                    try:
+                        os.replace(cand, output_path)
+                    except PermissionError:
+                        if not (os.path.exists(output_path) and os.path.getsize(output_path) > 10000):
+                            shutil.copy2(cand, output_path)
+                        try:
+                            os.remove(cand)
+                        except Exception:
+                            pass
                     return True
                 ok = cut_video_clip(cand, output_path, 0, get_video_duration(cand) or 600.0, keep_audio=False)
                 try:
@@ -538,6 +571,12 @@ def download_full_youtube_video(
     except Exception as e:
         if "PIPELINE_CANCELLED" in str(e) or is_pipeline_cancelled():
             raise RuntimeError("PIPELINE_CANCELLED")
+    finally:
+        for p_tmp in glob.glob(temp_base + "*"):
+            try:
+                os.remove(p_tmp)
+            except Exception:
+                pass
     return False
 
 

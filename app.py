@@ -12,9 +12,9 @@ import threading
 import subprocess
 from typing import Dict, Any, List, Optional, Set
 import requests
-from fastapi import FastAPI, HTTPException, Form
+from fastapi import FastAPI, HTTPException, Form, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from face_engine import FaceEngine
@@ -60,9 +60,25 @@ except Exception:
 app = FastAPI(title="MASYS CelebTimeline")
 face_engine = FaceEngine()
 
+
+@app.exception_handler(Exception)
+async def global_unhandled_exception_handler(request: Request, exc: Exception):
+    """
+    Guarantee that FastAPI NEVER returns plain-text 'Internal Server Error' (which causes
+    `Unexpected token 'I', "Internal S"... is not valid JSON` in the browser).
+    """
+    if isinstance(exc, HTTPException):
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Lỗi xử lý hệ thống: {str(exc)}"},
+    )
+
+
 PROJECTS: Dict[str, Dict[str, Any]] = {}
 BATCHES: Dict[str, Dict[str, Any]] = {}
 PROJECTS_LOCK = threading.Lock()
+SAVE_FILE_LOCK = threading.RLock()
 BATCHES_FILE = os.path.join(WORKSPACE_DIR, "_batches_state.json")
 UI_STATE_FILE = os.path.join(WORKSPACE_DIR, "_ui_state.json")
 
@@ -95,11 +111,23 @@ def _ensure_project_loaded(project_id: Optional[str]) -> Optional[Dict[str, Any]
 def _save_batches_state():
     with PROJECTS_LOCK:
         copy_data = json.loads(json.dumps(BATCHES, default=str))
-    try:
-        with open(BATCHES_FILE, "w", encoding="utf-8") as f:
-            json.dump(copy_data, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+    with SAVE_FILE_LOCK:
+        tmp_p = f"{BATCHES_FILE}.tmp_{threading.get_ident()}"
+        try:
+            with open(tmp_p, "w", encoding="utf-8") as f:
+                json.dump(copy_data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_p, BATCHES_FILE)
+        except Exception:
+            try:
+                with open(BATCHES_FILE, "w", encoding="utf-8") as f:
+                    json.dump(copy_data, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+            try:
+                if os.path.exists(tmp_p):
+                    os.remove(tmp_p)
+            except Exception:
+                pass
 
 
 def _load_batches_state():
@@ -127,8 +155,24 @@ def _save_project_state(project_id: str):
             return
         state_copy = json.loads(json.dumps(proj, default=str))
     pdir = _project_dir(project_id)
-    with open(os.path.join(pdir, "project.json"), "w", encoding="utf-8") as f:
-        json.dump(state_copy, f, ensure_ascii=False, indent=2)
+    target_p = os.path.join(pdir, "project.json")
+    tmp_p = f"{target_p}.tmp_{threading.get_ident()}"
+    with SAVE_FILE_LOCK:
+        try:
+            with open(tmp_p, "w", encoding="utf-8") as f:
+                json.dump(state_copy, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_p, target_p)
+        except Exception:
+            try:
+                with open(target_p, "w", encoding="utf-8") as f:
+                    json.dump(state_copy, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+            try:
+                if os.path.exists(tmp_p):
+                    os.remove(tmp_p)
+            except Exception:
+                pass
 
 
 def _to_web_url(abs_path: Optional[str]) -> str:
@@ -1291,8 +1335,10 @@ def _run_full_pipeline_worker(project_id: str, auto_render: bool = False):
                     ref_embeddings.extend(extra_embs)
 
             with PROJECTS_LOCK:
-                PROJECTS[project_id]["year_clips"][i] = y_clip
-                PROJECTS[project_id]["years"][i] = int(y_clip["year"])
+                existing_slot = PROJECTS[project_id]["year_clips"][i] if i < len(PROJECTS[project_id]["year_clips"]) else {}
+                if not existing_slot.get("user_modified"):
+                    PROJECTS[project_id]["year_clips"][i] = y_clip
+                    PROJECTS[project_id]["years"][i] = int(y_clip["year"])
         except Exception as e:
             if "PIPELINE_CANCELLED" in str(e) or is_pipeline_cancelled():
                 with PROJECTS_LOCK:
@@ -1300,15 +1346,17 @@ def _run_full_pipeline_worker(project_id: str, auto_render: bool = False):
                 _save_project_state(project_id)
                 return
             with PROJECTS_LOCK:
-                PROJECTS[project_id]["year_clips"][i] = {
-                    "year": yr,
-                    "requested_year": yr,
-                    "scene_index": sc_idx,
-                    "status": "error",
-                    "error": str(e),
-                    "title": f"Không tìm được clip năm {yr}",
-                    "duration_sec": year_dur,
-                }
+                existing_slot = PROJECTS[project_id]["year_clips"][i] if i < len(PROJECTS[project_id]["year_clips"]) else {}
+                if not existing_slot.get("user_modified"):
+                    PROJECTS[project_id]["year_clips"][i] = {
+                        "year": yr,
+                        "requested_year": yr,
+                        "scene_index": sc_idx,
+                        "status": "error",
+                        "error": str(e),
+                        "title": f"Không tìm được clip năm {yr}",
+                        "duration_sec": year_dur,
+                    }
         _save_project_state(project_id)
 
     if is_pipeline_cancelled():
@@ -1379,10 +1427,12 @@ def _run_full_pipeline_worker(project_id: str, auto_render: bool = False):
                 if extra_clip.get("video_id"):
                     used_video_ids.add(extra_clip["video_id"])
                 used_years.add(int(extra_clip["year"]))
-                ready_clips.append(extra_clip)
-                ready_clips.sort(key=lambda c: int(c["year"]))
-                current_total_dur = actual_news_dur + sum(float(c.get("duration_sec") or 0) for c in ready_clips)
                 with PROJECTS_LOCK:
+                    live_ready = [c for c in PROJECTS[project_id].get("year_clips", []) if c.get("status") == "ready"]
+                    live_ready.append(extra_clip)
+                    live_ready.sort(key=lambda c: (int(c["year"]), int(c.get("scene_index", 1))))
+                    ready_clips = list(live_ready)
+                    current_total_dur = actual_news_dur + sum(float(c.get("duration_sec") or 0) for c in ready_clips)
                     PROJECTS[project_id]["year_clips"] = list(ready_clips)
                     PROJECTS[project_id]["years"] = [int(x["year"]) for x in ready_clips]
                 _save_project_state(project_id)
@@ -1396,6 +1446,10 @@ def _run_full_pipeline_worker(project_id: str, auto_render: bool = False):
             PROJECTS[project_id]["status"] = "stopped"
         _save_project_state(project_id)
         return
+
+    with PROJECTS_LOCK:
+        ready_clips = [c for c in PROJECTS[project_id].get("year_clips", []) if c.get("status") == "ready"]
+    current_total_dur = actual_news_dur + sum(float(c.get("duration_sec") or 0) for c in ready_clips)
 
     # Step 3: Repeat a year ("1 năm 2 cảnh liên tiếp") ONLY IF the app could NOT find enough distinct years
     # to reach a ~1-minute video (e.g. minor celebrity with only 4–7 real years on YouTube).
@@ -1453,12 +1507,13 @@ def _run_full_pipeline_worker(project_id: str, auto_render: bool = False):
                 current_total_dur += float(sc2.get("duration_sec") or 4.0)
 
         if extra_scenes_by_year:
-            for c in ready_clips:
-                new_timeline_clips.append(c)
-                yr_val = int(c["year"])
-                if yr_val in extra_scenes_by_year:
-                    new_timeline_clips.append(extra_scenes_by_year.pop(yr_val))
             with PROJECTS_LOCK:
+                live_ready = [c for c in PROJECTS[project_id].get("year_clips", []) if c.get("status") == "ready"]
+                for c in live_ready:
+                    new_timeline_clips.append(c)
+                    yr_val = int(c["year"])
+                    if yr_val in extra_scenes_by_year:
+                        new_timeline_clips.append(extra_scenes_by_year.pop(yr_val))
                 PROJECTS[project_id]["year_clips"] = new_timeline_clips
                 PROJECTS[project_id]["years"] = [int(x["year"]) for x in new_timeline_clips]
 
@@ -1520,70 +1575,76 @@ def api_get_project(project_id: str):
 
 @app.post("/api/projects/{project_id}/swap-news")
 def api_swap_news(project_id: str, req: SwapNewsRequest):
-    proj = _ensure_project_loaded(project_id)
-    if not proj:
-        raise HTTPException(status_code=404, detail="Không tìm thấy dự án.")
-    if not any(p.get("status") == "running" for p in PROJECTS.values()):
-        clear_pipeline_cancel()
+    try:
+        proj = _ensure_project_loaded(project_id)
+        if not proj:
+            raise HTTPException(status_code=404, detail="Không tìm thấy dự án.")
+        if not any(p.get("status") == "running" for p in PROJECTS.values()):
+            clear_pipeline_cancel()
 
-    pdir = _project_dir(project_id)
-    celeb_name = proj["celeb_info"]["name"]
-    current_news = proj.get("news_clip") or {}
+        pdir = _project_dir(project_id)
+        celeb_name = (proj.get("celeb_info") or {}).get("name") or "Celebrity"
+        current_news = dict(proj.get("news_clip") or {})
 
-    if req.action == "clear":
+        if req.action == "clear":
+            with PROJECTS_LOCK:
+                PROJECTS[project_id]["news_clip"] = {
+                    "status": "cleared",
+                    "title": "Đã xóa bản tin mở đầu (Bấm Chỉnh giây để dán link mới, hoặc Xuất MP4 chỉ gồm các cảnh năm)",
+                    "duration_sec": 0.0,
+                    "start_sec": 0.0,
+                    "candidates": current_news.get("candidates", []),
+                }
+            _save_project_state(project_id)
+            return _serialize_project(PROJECTS[project_id])
+
+        if req.start_sec is not None and not req.custom_url and req.candidate_index is None:
+            dur = req.duration_sec or float(current_news.get("duration_sec") or proj.get("news_duration") or 11.5)
+            url = current_news.get("url")
+            vid = current_news.get("video_id", "news")
+            if not url:
+                raise HTTPException(status_code=400, detail="Chưa có video bản tin gốc để chỉnh giây.")
+            news_dir = os.path.join(pdir, "news")
+            ts_tag = int(time.time() * 1000) % 10000000
+            raw_path = os.path.join(news_dir, f"raw_{vid}_manual_{int(req.start_sec)}_{ts_tag}.mp4")
+            if not download_youtube_section(url, raw_path, start_sec=req.start_sec, duration_sec=dur + 2.0, with_audio=True):
+                raise HTTPException(status_code=400, detail="Không tải được phân đoạn mới từ video bản tin.")
+            out_clip = os.path.join(news_dir, f"news_clip_{vid}_manual_{ts_tag}.mp4")
+            thumb_path = os.path.join(news_dir, f"news_thumb_{vid}_manual_{ts_tag}.jpg")
+            cut_video_clip(raw_path, out_clip, start_sec=0.0, duration_sec=dur, keep_audio=True)
+            extract_thumbnail(out_clip, thumb_path, time_sec=min(2.0, dur * 0.3))
+            current_news["start_sec"] = round(req.start_sec, 2)
+            current_news["duration_sec"] = round(get_video_duration(out_clip) or dur, 2)
+            current_news["clip_path"] = out_clip
+            current_news["thumb_path"] = thumb_path
+            current_news["status"] = "ready"
+            with PROJECTS_LOCK:
+                PROJECTS[project_id]["news_clip"] = current_news
+            _save_project_state(project_id)
+            return _serialize_project(PROJECTS[project_id])
+
+        next_idx = (
+            req.candidate_index
+            if req.candidate_index is not None
+            else int(current_news.get("candidate_index", 0)) + 1
+        )
+        dur = req.duration_sec or float(proj.get("news_duration") or 11.5)
+        new_news = find_and_prepare_news_clip(
+            celeb_name=celeb_name,
+            project_dir=pdir,
+            target_duration=dur,
+            custom_url=req.custom_url,
+            candidate_index=next_idx,
+        )
+        new_news["status"] = "ready"
         with PROJECTS_LOCK:
-            PROJECTS[project_id]["news_clip"] = {
-                "status": "cleared",
-                "title": "Đã xóa bản tin mở đầu (Bấm Chỉnh giây để dán link mới, hoặc Xuất MP4 chỉ gồm các cảnh năm)",
-                "duration_sec": 0.0,
-                "start_sec": 0.0,
-                "candidates": current_news.get("candidates", []),
-            }
+            PROJECTS[project_id]["news_clip"] = new_news
         _save_project_state(project_id)
         return _serialize_project(PROJECTS[project_id])
-
-    if req.start_sec is not None and not req.custom_url and req.candidate_index is None:
-        dur = req.duration_sec or float(current_news.get("duration_sec") or proj.get("news_duration") or 11.5)
-        url = current_news.get("url")
-        vid = current_news.get("video_id", "news")
-        if not url:
-            raise HTTPException(status_code=400, detail="Chưa có video bản tin gốc để chỉnh giây.")
-        news_dir = os.path.join(pdir, "news")
-        raw_path = os.path.join(news_dir, f"raw_{vid}_manual_{int(req.start_sec)}.mp4")
-        if not download_youtube_section(url, raw_path, start_sec=req.start_sec, duration_sec=dur + 2.0, with_audio=True):
-            raise HTTPException(status_code=500, detail="Không tải được phân đoạn mới từ video bản tin.")
-        out_clip = os.path.join(news_dir, f"news_clip_{vid}_manual_{int(time.time())}.mp4")
-        thumb_path = os.path.join(news_dir, f"news_thumb_{vid}_manual_{int(time.time())}.jpg")
-        cut_video_clip(raw_path, out_clip, start_sec=0.0, duration_sec=dur, keep_audio=True)
-        extract_thumbnail(out_clip, thumb_path, time_sec=min(2.0, dur * 0.3))
-        current_news["start_sec"] = round(req.start_sec, 2)
-        current_news["duration_sec"] = round(get_video_duration(out_clip) or dur, 2)
-        current_news["clip_path"] = out_clip
-        current_news["thumb_path"] = thumb_path
-        current_news["status"] = "ready"
-        with PROJECTS_LOCK:
-            PROJECTS[project_id]["news_clip"] = current_news
-        _save_project_state(project_id)
-        return _serialize_project(PROJECTS[project_id])
-
-    next_idx = (
-        req.candidate_index
-        if req.candidate_index is not None
-        else int(current_news.get("candidate_index", 0)) + 1
-    )
-    dur = req.duration_sec or float(proj.get("news_duration") or 11.5)
-    new_news = find_and_prepare_news_clip(
-        celeb_name=celeb_name,
-        project_dir=pdir,
-        target_duration=dur,
-        custom_url=req.custom_url,
-        candidate_index=next_idx,
-    )
-    new_news["status"] = "ready"
-    with PROJECTS_LOCK:
-        PROJECTS[project_id]["news_clip"] = new_news
-    _save_project_state(project_id)
-    return _serialize_project(PROJECTS[project_id])
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Không thể cập nhật bản tin mở đầu: {e}")
 
 
 def _build_project_ref_embeddings(proj: Dict[str, Any], exclude_slot_idx: Optional[int] = None) -> List[Any]:
@@ -1594,11 +1655,14 @@ def _build_project_ref_embeddings(proj: Dict[str, Any], exclude_slot_idx: Option
     """
     ref_paths = list(proj.get("celeb_info", {}).get("reference_images", []) or [])
     verified_thumbs = []
-    for idx, yc in enumerate(proj.get("year_clips") or []):
+    with PROJECTS_LOCK:
+        yc_snapshot = list(proj.get("year_clips") or [])
+    for idx, yc in enumerate(yc_snapshot):
         if exclude_slot_idx is not None and idx == exclude_slot_idx:
             continue
         if (
-            yc.get("status") == "ready"
+            isinstance(yc, dict)
+            and yc.get("status") == "ready"
             and float(yc.get("face_similarity") or 0.0) >= 0.34
             and float(yc.get("match_ratio") or 0.0) >= 0.85
             and yc.get("thumb_path")
@@ -1612,188 +1676,259 @@ def _build_project_ref_embeddings(proj: Dict[str, Any], exclude_slot_idx: Option
     return face_engine.extract_reference_embeddings(ref_paths)
 
 
+def _locate_target_year_slot(
+    year_clips: List[Dict[str, Any]],
+    req_slot_index: Optional[int],
+    req_year: int,
+    orig_clip_id: Optional[str] = None,
+    orig_scene_idx: Optional[int] = None,
+) -> Optional[int]:
+    """
+    Safely locate the target year slot index even when multiple cards are being swapped concurrently
+    or while the background pipeline is still adding/updating clips.
+    """
+    if not year_clips:
+        return None
+    if orig_clip_id:
+        for idx, yc in enumerate(year_clips):
+            if isinstance(yc, dict) and yc.get("clip_id") == orig_clip_id:
+                return idx
+    if req_slot_index is not None and 0 <= req_slot_index < len(year_clips):
+        cand = year_clips[req_slot_index]
+        if isinstance(cand, dict):
+            c_yr = int(cand.get("year") or 0)
+            c_req_yr = int(cand.get("requested_year") or c_yr)
+            if c_yr == int(req_year) or c_req_yr == int(req_year):
+                return req_slot_index
+    for idx, yc in enumerate(year_clips):
+        if not isinstance(yc, dict):
+            continue
+        c_yr = int(yc.get("year") or 0)
+        c_req_yr = int(yc.get("requested_year") or c_yr)
+        c_sc = int(yc.get("scene_index") or 1)
+        if (c_yr == int(req_year) or c_req_yr == int(req_year)) and (orig_scene_idx is None or c_sc == orig_scene_idx):
+            return idx
+    for idx, yc in enumerate(year_clips):
+        if not isinstance(yc, dict):
+            continue
+        c_yr = int(yc.get("year") or 0)
+        c_req_yr = int(yc.get("requested_year") or c_yr)
+        if c_yr == int(req_year) or c_req_yr == int(req_year):
+            return idx
+    if req_slot_index is not None and 0 <= req_slot_index < len(year_clips):
+        return req_slot_index
+    return None
+
+
 @app.post("/api/projects/{project_id}/swap-year")
 def api_swap_year(project_id: str, req: SwapYearClipRequest):
-    proj = _ensure_project_loaded(project_id)
-    if not proj:
-        raise HTTPException(status_code=404, detail="Không tìm thấy dự án.")
-    if not any(p.get("status") == "running" for p in PROJECTS.values()):
-        clear_pipeline_cancel()
+    try:
+        proj = _ensure_project_loaded(project_id)
+        if not proj:
+            raise HTTPException(status_code=404, detail="Không tìm thấy dự án.")
+        if not any(p.get("status") == "running" for p in PROJECTS.values()):
+            clear_pipeline_cancel()
 
-    pdir = _project_dir(project_id)
-    celeb_name = proj["celeb_info"]["name"]
+        pdir = _project_dir(project_id)
+        celeb_name = (proj.get("celeb_info") or {}).get("name") or "Celebrity"
 
-    year_clips = proj.get("year_clips", [])
-    target_idx = None
-    current_yc = None
+        with PROJECTS_LOCK:
+            year_clips = list(proj.get("year_clips") or [])
+            target_idx = _locate_target_year_slot(year_clips, req.slot_index, req.year)
+            current_yc = dict(year_clips[target_idx]) if target_idx is not None else None
 
-    if req.slot_index is not None and 0 <= req.slot_index < len(year_clips):
-        target_idx = req.slot_index
-        current_yc = year_clips[target_idx]
-    else:
-        for idx, yc in enumerate(year_clips):
-            if int(yc["year"]) == int(req.year) or int(yc.get("requested_year", yc["year"])) == int(req.year):
-                target_idx = idx
-                current_yc = yc
-                break
+        if target_idx is None or current_yc is None:
+            raise HTTPException(status_code=404, detail=f"Không tìm thấy mốc năm {req.year}.")
 
-    if target_idx is None or current_yc is None:
-        raise HTTPException(status_code=404, detail=f"Không tìm thấy mốc năm {req.year}.")
+        orig_clip_id = current_yc.get("clip_id")
+        orig_scene_idx = int(current_yc.get("scene_index") or 1)
+        ref_embeddings = _build_project_ref_embeddings(proj, exclude_slot_idx=target_idx)
 
-    ref_embeddings = _build_project_ref_embeddings(proj, exclude_slot_idx=target_idx)
-
-    # Action: Add a 2nd consecutive scene for this year ("1 năm 2 cảnh liên tiếp")
-    if req.action == "add_scene":
-        if target_idx == 0:
-            raise HTTPException(
-                status_code=400,
-                detail="Cảnh năm đầu tiên luôn phải là 1 năm - 1 cảnh duy nhất để giữ chân người xem TikTok!",
+        # Action: Add a 2nd consecutive scene for this year ("1 năm 2 cảnh liên tiếp")
+        if req.action == "add_scene":
+            if target_idx == 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cảnh năm đầu tiên luôn phải là 1 năm - 1 cảnh duy nhất để giữ chân người xem TikTok!",
+                )
+            other_used_ids = {yc.get("video_id") for yc in year_clips if isinstance(yc, dict) and yc.get("video_id")}
+            sc2 = create_second_scene_for_year(
+                existing_yc=current_yc,
+                celeb_name=celeb_name,
+                project_dir=pdir,
+                face_engine=face_engine,
+                ref_embeddings=ref_embeddings,
+                used_video_ids=other_used_ids,
             )
-        other_used_ids = {yc.get("video_id") for yc in year_clips if yc.get("video_id")}
-        sc2 = create_second_scene_for_year(
-            existing_yc=current_yc,
-            celeb_name=celeb_name,
-            project_dir=pdir,
-            face_engine=face_engine,
-            ref_embeddings=ref_embeddings,
-            used_video_ids=other_used_ids,
-        )
-        if not sc2:
-            raise HTTPException(status_code=400, detail=f"Chưa tìm thêm được cảnh thứ 2 khác biệt cho năm {current_yc['year']}.")
-        with PROJECTS_LOCK:
-            PROJECTS[project_id]["year_clips"].insert(target_idx + 1, sc2)
-            PROJECTS[project_id]["years"] = [int(x["year"]) for x in PROJECTS[project_id]["year_clips"]]
-        _save_project_state(project_id)
-        return _serialize_project(PROJECTS[project_id])
+            if not sc2:
+                raise HTTPException(status_code=400, detail=f"Chưa tìm thêm được cảnh thứ 2 khác biệt cho năm {current_yc.get('year', req.year)}.")
+            sc2["user_modified"] = True
+            with PROJECTS_LOCK:
+                live_clips = PROJECTS[project_id].get("year_clips", [])
+                ins_idx = _locate_target_year_slot(live_clips, target_idx, req.year, orig_clip_id, orig_scene_idx)
+                if ins_idx is None:
+                    ins_idx = min(target_idx, len(live_clips))
+                else:
+                    ins_idx = ins_idx + 1
+                PROJECTS[project_id]["year_clips"].insert(ins_idx, sc2)
+                PROJECTS[project_id]["years"] = [int(x.get("year") or req.year) for x in PROJECTS[project_id]["year_clips"]]
+            _save_project_state(project_id)
+            return _serialize_project(PROJECTS[project_id])
 
-    # Action: Remove a scene
-    if req.action == "remove_scene":
-        if len(year_clips) <= 2:
-            raise HTTPException(status_code=400, detail="Cần giữ lại tối thiểu 2 cảnh năm.")
-        with PROJECTS_LOCK:
-            PROJECTS[project_id]["year_clips"].pop(target_idx)
-            PROJECTS[project_id]["years"] = [int(x["year"]) for x in PROJECTS[project_id]["year_clips"]]
-        _save_project_state(project_id)
-        return _serialize_project(PROJECTS[project_id])
+        # Action: Remove a scene
+        if req.action == "remove_scene":
+            if len(year_clips) <= 2:
+                raise HTTPException(status_code=400, detail="Cần giữ lại tối thiểu 2 cảnh năm.")
+            with PROJECTS_LOCK:
+                live_clips = PROJECTS[project_id].get("year_clips", [])
+                if len(live_clips) <= 2:
+                    raise HTTPException(status_code=400, detail="Cần giữ lại tối thiểu 2 cảnh năm.")
+                rem_idx = _locate_target_year_slot(live_clips, target_idx, req.year, orig_clip_id, orig_scene_idx)
+                if rem_idx is not None and 0 <= rem_idx < len(live_clips):
+                    PROJECTS[project_id]["year_clips"].pop(rem_idx)
+                    PROJECTS[project_id]["years"] = [int(x.get("year") or req.year) for x in PROJECTS[project_id]["year_clips"]]
+            _save_project_state(project_id)
+            return _serialize_project(PROJECTS[project_id])
 
-    clip_dur = req.duration_sec or float(current_yc.get("duration_sec") or proj.get("year_clip_duration") or 4.2)
-    req_yr_dir = int(current_yc.get("requested_year") or current_yc["year"])
-    year_dir = os.path.join(pdir, f"year_{req_yr_dir}")
-    os.makedirs(year_dir, exist_ok=True)
+        clip_dur = req.duration_sec or float(current_yc.get("duration_sec") or proj.get("year_clip_duration") or 4.2)
+        req_yr_dir = int(current_yc.get("requested_year") or current_yc.get("year") or req.year)
+        year_dir = os.path.join(pdir, f"year_{req_yr_dir}")
+        os.makedirs(year_dir, exist_ok=True)
 
-    # Action 1: "Đổi cảnh" — pick ANOTHER face moment of the celebrity inside the SAME YouTube video.
-    if req.action == "next_segment":
-        new_yc = _swap_to_next_face_segment(current_yc, year_dir, clip_dur, ref_embeddings, celeb_name)
-        with PROJECTS_LOCK:
-            PROJECTS[project_id]["year_clips"][target_idx] = new_yc
-        _save_project_state(project_id)
-        return _serialize_project(PROJECTS[project_id])
+        # Action 1: "Đổi cảnh" — pick ANOTHER face moment of the celebrity inside the SAME YouTube video.
+        if req.action == "next_segment":
+            # If this card hasn't finished downloading its initial video yet, fall back to finding a video cleanly
+            if not current_yc.get("url") and not (current_yc.get("raw_path") and os.path.exists(current_yc.get("raw_path", ""))):
+                req.action = "next_video"
+            else:
+                new_yc = _swap_to_next_face_segment(current_yc, year_dir, clip_dur, ref_embeddings, celeb_name)
+                new_yc["user_modified"] = True
+                with PROJECTS_LOCK:
+                    live_clips = PROJECTS[project_id].get("year_clips", [])
+                    upd_idx = _locate_target_year_slot(live_clips, target_idx, req.year, orig_clip_id, orig_scene_idx)
+                    if upd_idx is not None:
+                        PROJECTS[project_id]["year_clips"][upd_idx] = new_yc
+                _save_project_state(project_id)
+                return _serialize_project(PROJECTS[project_id])
 
-    # Action 2: "Chỉnh giây" — manual start_sec / duration trim (current URL or a custom URL)
-    target_url = (req.custom_url or "").strip() or current_yc.get("url")
-    if req.action == "custom_trim" and req.start_sec is not None and target_url:
-        vid_match = re.search(r"(?:v=|youtu\.be/|shorts/)([A-Za-z0-9_-]{11})", target_url)
-        vid = vid_match.group(1) if vid_match else current_yc.get("video_id", "vid")
-        ts = int(time.time() * 1000) % 10000000
-        out_clip = os.path.join(year_dir, f"clip_{req.year}_{vid}_manual_{ts}.mp4")
-        thumb_path = os.path.join(year_dir, f"thumb_{req.year}_{vid}_manual_{ts}.jpg")
-        start_abs = max(0.0, float(req.start_sec))
+        # Action 2: "Chỉnh giây" — manual start_sec / duration trim (current URL or a custom URL)
+        target_url = (req.custom_url or "").strip() or current_yc.get("url")
+        if req.action == "custom_trim" and req.start_sec is not None and target_url:
+            vid_match = re.search(r"(?:v=|youtu\.be/|shorts/)([A-Za-z0-9_-]{11})", target_url)
+            vid = vid_match.group(1) if vid_match else current_yc.get("video_id", "vid")
+            ts = f"{threading.get_ident()}_{int(time.time() * 1000) % 10000000}"
+            out_clip = os.path.join(year_dir, f"clip_{req.year}_{vid}_manual_{ts}.mp4")
+            thumb_path = os.path.join(year_dir, f"thumb_{req.year}_{vid}_manual_{ts}.jpg")
+            start_abs = max(0.0, float(req.start_sec))
 
-        cut_ok = False
-        # Fast path: trim locally if the requested range lies inside the already-downloaded raw window of the same video
-        raw_path = current_yc.get("raw_path")
-        raw_offset = float(current_yc.get("raw_offset") or 0.0)
-        if (
-            not req.custom_url
-            and vid == current_yc.get("video_id")
-            and raw_path
-            and os.path.exists(raw_path)
-        ):
-            raw_len = get_video_duration(raw_path)
-            rel = start_abs - raw_offset
-            if rel >= 0 and rel + clip_dur <= raw_len + 0.2:
-                cut_ok = cut_video_clip(raw_path, out_clip, start_sec=rel, duration_sec=clip_dur, keep_audio=False)
+            cut_ok = False
+            # Fast path: trim locally if the requested range lies inside the already-downloaded raw window of the same video
+            raw_path = current_yc.get("raw_path")
+            raw_offset = float(current_yc.get("raw_offset") or 0.0)
+            if (
+                not req.custom_url
+                and vid == current_yc.get("video_id")
+                and raw_path
+                and os.path.exists(raw_path)
+            ):
+                raw_len = get_video_duration(raw_path)
+                rel = start_abs - raw_offset
+                if rel >= 0 and rel + clip_dur <= raw_len + 0.2:
+                    cut_ok = cut_video_clip(raw_path, out_clip, start_sec=rel, duration_sec=clip_dur, keep_audio=False)
 
-        if not cut_ok:
-            dl_path = os.path.join(year_dir, f"raw_{vid}_manual_{int(start_abs * 10)}_{int(clip_dur * 10)}_{ts}.mp4")
-            try:
-                ok_dl = download_youtube_section(target_url, dl_path, start_sec=start_abs, duration_sec=clip_dur + 1.5, with_audio=False)
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=f"Không tải được đoạn video từ YouTube: {e}")
-            if not ok_dl:
-                raise HTTPException(status_code=500, detail="Không tải được đoạn video từ YouTube (thử lại hoặc đổi giây bắt đầu).")
-            cut_ok = cut_video_clip(dl_path, out_clip, start_sec=0.0, duration_sec=clip_dur, keep_audio=False)
             if not cut_ok:
-                raise HTTPException(status_code=500, detail="Không cắt được đoạn video mới.")
+                dl_path = os.path.join(year_dir, f"raw_{vid}_manual_{int(start_abs * 10)}_{int(clip_dur * 10)}_{ts}.mp4")
+                try:
+                    ok_dl = download_youtube_section(target_url, dl_path, start_sec=start_abs, duration_sec=clip_dur + 1.5, with_audio=False)
+                except Exception as e:
+                    raise HTTPException(status_code=400, detail=f"Không tải được đoạn video từ YouTube: {e}")
+                if not ok_dl:
+                    raise HTTPException(status_code=400, detail="Không tải được đoạn video từ YouTube (thử lại hoặc đổi giây bắt đầu).")
+                cut_ok = cut_video_clip(dl_path, out_clip, start_sec=0.0, duration_sec=clip_dur, keep_audio=False)
+                if not cut_ok:
+                    raise HTTPException(status_code=400, detail="Không cắt được đoạn video mới.")
 
-        extract_thumbnail(out_clip, thumb_path, time_sec=clip_dur * 0.4)
-        new_yc = dict(current_yc)
-        new_yc["video_id"] = vid
-        new_yc["url"] = target_url
-        if req.custom_url:
-            new_yc["title"] = f"Custom Video ({vid})"
-            new_yc["raw_path"] = None
-            new_yc["segments"] = []
+            extract_thumbnail(out_clip, thumb_path, time_sec=clip_dur * 0.4)
+            new_yc = dict(current_yc)
+            new_yc["video_id"] = vid
+            new_yc["url"] = target_url
+            if req.custom_url:
+                new_yc["title"] = f"Custom Video ({vid})"
+                new_yc["raw_path"] = None
+                new_yc["segments"] = []
+            if req.new_year_label is not None and 1930 <= int(req.new_year_label) <= 2035:
+                new_yc["year"] = int(req.new_year_label)
+            new_yc["start_sec"] = round(start_abs, 2)
+            new_yc["duration_sec"] = round(get_video_duration(out_clip) or clip_dur, 2)
+            new_yc["clip_path"] = out_clip
+            new_yc["thumb_path"] = thumb_path
+            new_yc["status"] = "ready"
+            new_yc["user_modified"] = True
+            with PROJECTS_LOCK:
+                live_clips = PROJECTS[project_id].get("year_clips", [])
+                upd_idx = _locate_target_year_slot(live_clips, target_idx, req.year, orig_clip_id, orig_scene_idx)
+                if upd_idx is not None:
+                    PROJECTS[project_id]["year_clips"][upd_idx] = new_yc
+                    PROJECTS[project_id]["years"] = [int(x.get("year") or req.year) for x in PROJECTS[project_id]["year_clips"]]
+            _save_project_state(project_id)
+            return _serialize_project(PROJECTS[project_id])
+
+        # Action 3: "Đổi video" — swap to next YouTube video candidate or custom URL (AI auto-locate face)
+        next_cand_idx = 0 if req.custom_url else int(current_yc.get("candidate_index") or 0) + 1
+        years_list = [int(x.get("requested_year") or x.get("year") or req.year) for x in year_clips if isinstance(x, dict)]
+        safe_win_idx = min(target_idx, max(0, len(years_list) - 1))
+        win = _compute_year_window(years_list, safe_win_idx) if years_list else (int(req.year) - 1, int(req.year) + 1)
+        req_yr = int(req.new_year_label or current_yc.get("requested_year") or current_yc.get("year") or req.year)
+        other_used_ids = {
+            yc.get("video_id")
+            for idx, yc in enumerate(year_clips)
+            if idx != target_idx and isinstance(yc, dict) and yc.get("video_id")
+        }
+        if not req.custom_url and current_yc.get("video_id"):
+            other_used_ids.add(current_yc["video_id"])
+        other_used_years = {
+            int(yc["year"])
+            for idx, yc in enumerate(year_clips)
+            if idx != target_idx and isinstance(yc, dict) and yc.get("year")
+        }
+        sc_idx_val = int(current_yc.get("scene_index") or 1)
+
+        try:
+            new_yc = find_and_prepare_year_clip(
+                celeb_name=celeb_name,
+                year=req_yr,
+                project_dir=pdir,
+                face_engine=face_engine,
+                ref_embeddings=ref_embeddings,
+                clip_duration=clip_dur,
+                candidate_index=0,
+                segment_index=0,
+                custom_url=req.custom_url,
+                year_window=win,
+                used_video_ids=other_used_ids,
+                forbidden_years=other_used_years if sc_idx_val == 1 else None,
+                extra_forbidden_terms=(proj.get("celeb_info") or {}).get("youtube_forbidden_terms", []),
+                scene_index=sc_idx_val,
+            )
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Không tìm được video khác cho năm {req_yr}: {e}")
+        new_yc["candidate_index"] = next_cand_idx
         if req.new_year_label is not None and 1930 <= int(req.new_year_label) <= 2035:
             new_yc["year"] = int(req.new_year_label)
-        new_yc["start_sec"] = round(start_abs, 2)
-        new_yc["duration_sec"] = round(get_video_duration(out_clip) or clip_dur, 2)
-        new_yc["clip_path"] = out_clip
-        new_yc["thumb_path"] = thumb_path
         new_yc["status"] = "ready"
+        new_yc["user_modified"] = True
         with PROJECTS_LOCK:
-            PROJECTS[project_id]["year_clips"][target_idx] = new_yc
-            PROJECTS[project_id]["years"] = [int(x["year"]) for x in PROJECTS[project_id]["year_clips"]]
+            live_clips = PROJECTS[project_id].get("year_clips", [])
+            upd_idx = _locate_target_year_slot(live_clips, target_idx, req.year, orig_clip_id, orig_scene_idx)
+            if upd_idx is not None:
+                PROJECTS[project_id]["year_clips"][upd_idx] = new_yc
+                PROJECTS[project_id]["years"] = [int(x.get("year") or req_yr) for x in PROJECTS[project_id]["year_clips"]]
         _save_project_state(project_id)
         return _serialize_project(PROJECTS[project_id])
-
-    # Action 3: "Đổi video" — swap to next YouTube video candidate or custom URL (AI auto-locate face)
-    next_cand_idx = 0 if req.custom_url else int(current_yc.get("candidate_index", 0)) + 1
-    years_list = [int(x.get("requested_year") or x["year"]) for x in year_clips]
-    win = _compute_year_window(years_list, target_idx)
-    req_yr = int(req.new_year_label or current_yc.get("requested_year") or req.year)
-    other_used_ids = {
-        yc.get("video_id")
-        for idx, yc in enumerate(year_clips)
-        if idx != target_idx and yc.get("video_id")
-    }
-    if not req.custom_url and current_yc.get("video_id"):
-        other_used_ids.add(current_yc["video_id"])
-    other_used_years = {
-        int(yc["year"])
-        for idx, yc in enumerate(year_clips)
-        if idx != target_idx and yc.get("year")
-    }
-    sc_idx_val = int(current_yc.get("scene_index", 1))
-
-    try:
-        new_yc = find_and_prepare_year_clip(
-            celeb_name=celeb_name,
-            year=req_yr,
-            project_dir=pdir,
-            face_engine=face_engine,
-            ref_embeddings=ref_embeddings,
-            clip_duration=clip_dur,
-            candidate_index=0 if not req.custom_url else 0,
-            segment_index=0,
-            custom_url=req.custom_url,
-            year_window=win,
-            used_video_ids=other_used_ids,
-            forbidden_years=other_used_years if sc_idx_val == 1 else None,
-            extra_forbidden_terms=proj["celeb_info"].get("youtube_forbidden_terms", []),
-            scene_index=sc_idx_val,
-        )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Không tìm được video khác cho năm {req_yr}: {e}")
-    new_yc["candidate_index"] = next_cand_idx
-    if req.new_year_label is not None and 1930 <= int(req.new_year_label) <= 2035:
-        new_yc["year"] = int(req.new_year_label)
-    new_yc["status"] = "ready"
-    with PROJECTS_LOCK:
-        PROJECTS[project_id]["year_clips"][target_idx] = new_yc
-        PROJECTS[project_id]["years"] = [int(x["year"]) for x in PROJECTS[project_id]["year_clips"]]
-    _save_project_state(project_id)
-    return _serialize_project(PROJECTS[project_id])
+        raise HTTPException(status_code=400, detail=f"Không thể xử lý cảnh năm {req.year}: {e}")
 
 
 def _swap_to_next_face_segment(

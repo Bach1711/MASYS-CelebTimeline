@@ -1,8 +1,11 @@
 import os
 import sys
+import shutil
+import tempfile
+import threading
 import cv2
 import numpy as np
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 _BASE_CANDIDATE = (
     os.path.dirname(os.path.abspath(sys.executable))
@@ -14,6 +17,40 @@ if not os.path.exists(MODELS_DIR) and getattr(sys, "_MEIPASS", None):
     MODELS_DIR = os.path.join(sys._MEIPASS, "models")
 YUNET_PATH = os.path.join(MODELS_DIR, "face_detection_yunet_2023mar.onnx")
 SFACE_PATH = os.path.join(MODELS_DIR, "face_recognition_sface_2021dec.onnx")
+
+_MODEL_PATH_LOCK = threading.Lock()
+_SAFE_ASCII_MODELS: Dict[str, str] = {}
+
+
+def _ensure_ascii_model_path(path: str) -> str:
+    """
+    OpenCV C++ model loaders (`FaceDetectorYN.create`, `FaceRecognizerSF.create`) on Windows
+    can fail if the user extracted the ZIP inside a folder with Vietnamese/Unicode characters
+    (e.g. `D:\\Tài nguyên Tiktok\\MASYS-CelebTimeline_EXE`).
+    If `path` contains non-ASCII characters, transparently cache the model in an ASCII temp folder.
+    """
+    if not path or not os.path.exists(path):
+        return path
+    try:
+        path.encode("ascii")
+        return path
+    except UnicodeEncodeError:
+        pass
+
+    with _MODEL_PATH_LOCK:
+        if path in _SAFE_ASCII_MODELS and os.path.exists(_SAFE_ASCII_MODELS[path]):
+            return _SAFE_ASCII_MODELS[path]
+        safe_dir = os.path.join(tempfile.gettempdir(), "masys_celeb_models")
+        try:
+            safe_dir.encode("ascii")
+        except UnicodeEncodeError:
+            safe_dir = r"C:\Temp\masys_celeb_models"
+        os.makedirs(safe_dir, exist_ok=True)
+        dst = os.path.join(safe_dir, os.path.basename(path))
+        if not os.path.exists(dst) or os.path.getsize(dst) != os.path.getsize(path):
+            shutil.copy2(path, dst)
+        _SAFE_ASCII_MODELS[path] = dst
+        return dst
 
 
 def read_image_unicode(path: str) -> Optional[np.ndarray]:
@@ -41,27 +78,57 @@ def write_image_unicode(path: str, img: np.ndarray) -> bool:
 
 
 class FaceEngine:
+    """
+    Thread-safe OpenCV YuNet + SFace engine.
+    Each thread gets its own thread-local `FaceDetectorYN` and `FaceRecognizerSF` C++ instance
+    via `threading.local()` so concurrent pipeline workers and user "Đổi cảnh" / "Đổi video"
+    requests NEVER collide on `detector.setInputSize(...)` or `recognizer.alignCrop(...)`.
+    """
+
     def __init__(self):
+        self._local = threading.local()
         self.detector = None
         self.recognizer = None
         self._init_models()
 
-    def _init_models(self):
-        if os.path.exists(YUNET_PATH):
-            self.detector = cv2.FaceDetectorYN.create(
-                YUNET_PATH,
+    def _create_detector_and_recognizer(self) -> Tuple[Any, Any]:
+        det = None
+        rec = None
+        yunet_p = _ensure_ascii_model_path(YUNET_PATH)
+        sface_p = _ensure_ascii_model_path(SFACE_PATH)
+        if os.path.exists(yunet_p):
+            det = cv2.FaceDetectorYN.create(
+                yunet_p,
                 "",
                 (320, 320),
                 score_threshold=0.6,
                 nms_threshold=0.3,
                 top_k=5000,
             )
-        if os.path.exists(SFACE_PATH):
-            self.recognizer = cv2.FaceRecognizerSF.create(SFACE_PATH, "")
+        if os.path.exists(sface_p):
+            rec = cv2.FaceRecognizerSF.create(sface_p, "")
+        return det, rec
+
+    def _init_models(self):
+        det, rec = self._create_detector_and_recognizer()
+        self.detector = det
+        self.recognizer = rec
+        self._local.detector = det
+        self._local.recognizer = rec
+
+    def _get_thread_models(self) -> Tuple[Any, Any]:
+        det = getattr(self._local, "detector", None)
+        rec = getattr(self._local, "recognizer", None)
+        if det is None and os.path.exists(YUNET_PATH):
+            det, rec = self._create_detector_and_recognizer()
+            self._local.detector = det
+            self._local.recognizer = rec
+        return det, rec
 
     def detect_faces(self, img: np.ndarray) -> List[np.ndarray]:
-        """Return list of raw YuNet face rows sorted by area descending."""
-        if img is None or self.detector is None:
+        """Return list of raw YuNet face rows sorted by area descending (100% thread-safe)."""
+        detector, _ = self._get_thread_models()
+        if img is None or detector is None:
             return []
         h, w = img.shape[:2]
         if h == 0 or w == 0:
@@ -75,8 +142,11 @@ class FaceEngine:
             resized = img
 
         rh, rw = resized.shape[:2]
-        self.detector.setInputSize((rw, rh))
-        _, faces = self.detector.detect(resized)
+        try:
+            detector.setInputSize((rw, rh))
+            _, faces = detector.detect(resized)
+        except Exception:
+            return []
         if faces is None or len(faces) == 0:
             return []
 
@@ -90,12 +160,13 @@ class FaceEngine:
         return results
 
     def extract_embedding(self, img: np.ndarray, face_row: np.ndarray) -> Optional[np.ndarray]:
-        """Extract 128-D SFace embedding for a detected face."""
-        if self.recognizer is None or img is None or face_row is None:
+        """Extract 128-D SFace embedding for a detected face (100% thread-safe)."""
+        _, recognizer = self._get_thread_models()
+        if recognizer is None or img is None or face_row is None:
             return None
         try:
-            aligned = self.recognizer.alignCrop(img, face_row)
-            feat = self.recognizer.feature(aligned)
+            aligned = recognizer.alignCrop(img, face_row)
+            feat = recognizer.feature(aligned)
             return feat
         except Exception:
             return None
@@ -104,7 +175,7 @@ class FaceEngine:
         """Extract reference face embeddings from one or more reference portrait photos."""
         embeddings = []
         for path in image_paths:
-            if not os.path.exists(path):
+            if not path or not os.path.exists(path):
                 continue
             img = read_image_unicode(path)
             if img is None:
@@ -118,14 +189,15 @@ class FaceEngine:
         return embeddings
 
     def compare_embeddings(self, feat: np.ndarray, ref_embeddings: List[np.ndarray]) -> float:
-        """Return maximum cosine similarity (0.0 to 1.0) against reference embeddings."""
-        if self.recognizer is None or feat is None or not ref_embeddings:
+        """Return maximum cosine similarity (0.0 to 1.0) against reference embeddings (100% thread-safe)."""
+        _, recognizer = self._get_thread_models()
+        if recognizer is None or feat is None or not ref_embeddings:
             return 0.5
         best_sim = -1.0
         for ref in ref_embeddings:
             try:
                 sim = float(
-                    self.recognizer.match(
+                    recognizer.match(
                         feat, ref, cv2.FaceRecognizerSF_FR_COSINE
                     )
                 )
@@ -221,12 +293,13 @@ class FaceEngine:
             sim = 0.5
             emb = None
             aligned_gray = None
-            if self.recognizer is not None:
+            _, recognizer = self._get_thread_models()
+            if recognizer is not None:
                 try:
-                    aligned_bgr = self.recognizer.alignCrop(frame, face)
+                    aligned_bgr = recognizer.alignCrop(frame, face)
                     aligned_gray = cv2.cvtColor(cv2.resize(aligned_bgr, (64, 64)), cv2.COLOR_BGR2GRAY).astype(np.float32)
                     if require_identity and ref_embeddings:
-                        emb = self.recognizer.feature(aligned_bgr)
+                        emb = recognizer.feature(aligned_bgr)
                         if emb is not None:
                             sim = self.compare_embeddings(emb, ref_embeddings)
                 except Exception:

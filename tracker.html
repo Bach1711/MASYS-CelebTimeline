@@ -60,7 +60,7 @@
           <span id="statTodo" class="px-3 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-300">Todo: 0</span>
           <span id="statInProgress" class="px-3 py-1 rounded-full bg-blue-100 text-blue-800 border border-blue-200">In Progress: 0</span>
           <span id="statReview" class="px-3 py-1 rounded-full bg-amber-100 text-amber-800 border border-amber-200">Review: 0</span>
-          <span id="statDone" class="px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">Done: 15</span>
+          <span id="statDone" class="px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">Done: 16</span>
         </div>
       </div>
 
@@ -68,7 +68,7 @@
         <div id="overallProgressBar" class="bg-emerald-500 h-full transition-all duration-300" style="width: 100%"></div>
       </div>
       <div class="flex justify-between text-xs text-slate-600 font-semibold">
-        <span id="overallProgressLabel">Hoàn thành: 100% (15/15 Tickets)</span>
+        <span id="overallProgressLabel">Hoàn thành: 100% (16/16 Tickets)</span>
         <span>Chuẩn nghiệm thu: Khung dọc 9:16 (1080×1920) • Giữ tiếng bản tin đầu • Tắt tiếng các năm</span>
       </div>
     </div>
@@ -312,6 +312,20 @@
           "Dòng 1 (Tên nhân vật) hiển thị màu vàng (#FFE600) viền đen đậm (~90pt, tự co giãn nếu tên dài), căn giữa phía trên khung hình video.",
           "Dòng 2 ((Năm sinh-Năm mất)) hiển thị màu trắng (#FFFFFF) viền đen đậm (~66pt), căn giữa ngay dưới dòng tên và cách mép trên khung video ~34px.",
           "Kéo dài xuyên suốt toàn bộ thời lượng cảnh Bản tin mở đầu và đồng bộ xem trước trên ô 📺 BẢN TIN MỞ ĐẦU của Storyboard."
+        ]
+      },
+      {
+        id: "CON-224",
+        url: "https://linear.app/conducdaudan/issue/CON-224/bugfix-sua-triet-dje-loi-internal-server-error-unexpected-token-i-khi",
+        title: "[Bugfix] Sửa triệt để lỗi Internal Server Error (\"Unexpected token 'I'...\") khi bấm Đổi cảnh / Đổi video lúc đang chạy & trên máy khách",
+        priority: "Urgent",
+        status: "Done",
+        module: "face_engine.py, youtube_pipeline.py, app.py, static/index.html",
+        description: "Cấp riêng bộ nhận diện C++ OpenCV YuNet + SFace cho từng luồng (threading.local()) và tự động xử lý đường dẫn thư mục tiếng Việt; khóa ghi file nguyên tử project.json; định vị slot an toàn khi bấm Đổi cảnh / Đổi video trên nhiều ô cùng lúc hoặc lúc đang chạy ngầm; bổ sung Global JSON Exception Handler và safeReadJson.",
+        dod: [
+          "FaceEngine an toàn đa luồng 100% (threading.local() cho detector/recognizer) — bấm Đổi cảnh / Đổi video trên nhiều ô cùng lúc hoặc khi pipeline đang chạy không bao giờ xung đột OpenCV.",
+          "Khóa ghi file nguyên tử (SAVE_FILE_LOCK) cho project.json và định vị slot an toàn (user_modified) để cảnh vừa đổi không bị luồng chạy ngầm ghi đè.",
+          "Bọc try...except toàn diện + Global Exception Handler ở app.py và safeReadJson ở static/index.html, loại bỏ hoàn toàn lỗi 'Unexpected token I, Internal S... is not valid JSON'."
         ]
       }
     ];
