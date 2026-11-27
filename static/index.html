@@ -1414,19 +1414,22 @@
         renderBatchSwitcher(b);
         saveUiState();
 
-        // If user hasn't manually clicked a specific tab, follow the currently running celebrity
-        if (batchFollowActive && b.items && b.items[b.current_index]) {
-          const activeItem = b.items[b.current_index];
-          if (activeItem.project_id && activeItem.project_id !== currentProjectId) {
-            currentProjectId = activeItem.project_id;
-            if (typeof activeItem.row_index === 'number') {
-              activeTableRowIdx = activeItem.row_index;
-              renderCelebTable();
-            }
-            wipeStoryboardDOM();
-            await pollProjectStatus();
-            if (!pollTimer) {
-              pollTimer = setInterval(pollProjectStatus, 1800);
+        // If user hasn't manually clicked a specific tab, only auto-follow to the next running tab after the current tab finishes
+        if (batchFollowActive && b.items && b.items.length) {
+          const curItem = b.items.find(it => it.project_id === currentProjectId);
+          if (!curItem || curItem.status !== 'running') {
+            const nextRunning = b.items.find(it => it.status === 'running');
+            if (nextRunning && nextRunning.project_id && nextRunning.project_id !== currentProjectId) {
+              currentProjectId = nextRunning.project_id;
+              if (typeof nextRunning.row_index === 'number') {
+                activeTableRowIdx = nextRunning.row_index;
+                renderCelebTable();
+              }
+              wipeStoryboardDOM();
+              await pollProjectStatus();
+              if (!pollTimer) {
+                pollTimer = setInterval(pollProjectStatus, 1800);
+              }
             }
           }
         }
@@ -1486,10 +1489,11 @@
       const scannedCnt = rowTabModels.filter(m => !!m.info || m.status !== 'unscanned').length;
       const readyOrExportedCount = rowTabModels.filter(m => m.status === 'ready_for_preview' || m.status === 'completed' || !!m.output_path).length;
       const exportedCount = rowTabModels.filter(m => !!m.output_path || m.status === 'completed').length;
-      const isAnyRunning = (batch && batch.status === 'running') || rowTabModels.some(m => m.status === 'running');
+      const runningCnt = rowTabModels.filter(m => m.status === 'running').length;
+      const isAnyRunning = (batch && batch.status === 'running') || runningCnt > 0;
 
       if (isAnyRunning) {
-        summaryEl.innerText = `⏳ Đang tìm & cắt tự động: Đã xong ${readyOrExportedCount}/${totalCnt} nhân vật (Bấm vào bất kỳ Tab nào để xem tiến độ ngay lập tức)`;
+        summaryEl.innerText = `⚡ Đa luồng (${runningCnt} nhân vật đang chạy song song): Đã xong ${readyOrExportedCount}/${totalCnt} nhân vật (Bấm vào bất kỳ Tab nào để xem trực tiếp)`;
       } else if (exportedCount === totalCnt && totalCnt > 0) {
         summaryEl.innerText = `🎉 Đã xuất MP4 hoàn tất cho cả ${exportedCount}/${totalCnt} nhân vật!`;
       } else if (readyOrExportedCount > 0) {

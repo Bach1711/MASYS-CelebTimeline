@@ -824,7 +824,8 @@ def api_start_batch(req: StartBatchRequest):
 
     batch_items = []
     first_proj = None
-    first_running_assigned = False
+    running_assigned_count = 0
+    BATCH_MAX_PARALLEL_CELEBS = 3
 
     # Pre-create (or reuse scanned/cut) project records for ALL items upfront so every tab is immediately clickable without any popup!
     for idx, entry in enumerate(entry_list):
@@ -860,16 +861,20 @@ def api_start_batch(req: StartBatchRequest):
             )
             continue
 
-        is_first_to_run = not first_running_assigned
-        first_running_assigned = True
+        start_immediately = running_assigned_count < BATCH_MAX_PARALLEL_CELEBS
+        running_assigned_count += 1
 
         if p_existing:
             with PROJECTS_LOCK:
                 p = PROJECTS[pid]
                 p["output_folder"] = output_folder
-                p["status"] = "running" if is_first_to_run else "queued"
-                p["progress_pct"] = 5 if is_first_to_run else 0
-                p["progress_message"] = "Đang bắt đầu tìm & cắt video..." if is_first_to_run else "Đang chờ tới lượt xử lý..."
+                p["status"] = "running" if start_immediately else "queued"
+                p["progress_pct"] = 5 if start_immediately else 0
+                p["progress_message"] = (
+                    "⚡ Đa luồng: Đang bắt đầu tìm & cắt video..."
+                    if start_immediately
+                    else "Đang chờ luồng trống..."
+                )
                 if entry.years:
                     p["years"] = sorted(entry.years)
             _save_project_state(pid)
@@ -886,7 +891,8 @@ def api_start_batch(req: StartBatchRequest):
             pid = _create_project_record(
                 p_req,
                 max_keep=max_keep,
-                initial_status="running" if is_first_to_run else "queued",
+                initial_status="running" if start_immediately else "queued",
+                run_cleanup=False,
             )
 
         with PROJECTS_LOCK:
@@ -903,9 +909,13 @@ def api_start_batch(req: StartBatchRequest):
                 "display_name": disp_name,
                 "wiki_title": wiki_t or disp_name,
                 "project_id": pid,
-                "status": "running" if is_first_to_run else "queued",
-                "progress_pct": 5 if is_first_to_run else 0,
-                "progress_message": "Đang bắt đầu tìm & cắt video..." if is_first_to_run else "Đang chờ tới lượt xử lý...",
+                "status": "running" if start_immediately else "queued",
+                "progress_pct": 5 if start_immediately else 0,
+                "progress_message": (
+                    "⚡ Đa luồng: Đang bắt đầu tìm & cắt video..."
+                    if start_immediately
+                    else "Đang chờ luồng trống..."
+                ),
                 "total_duration": 0.0,
                 "output_path": "",
                 "error": None,
@@ -973,8 +983,12 @@ def _sync_batch_items(batch_id: str) -> Optional[Dict[str, Any]]:
                 if p.get("final_video") and p["final_video"].get("output_path"):
                     item["total_duration"] = p["final_video"].get("total_duration", cut_dur)
                     item["output_path"] = p["final_video"].get("output_path", "")
-                    if item["status"] != "running":
+                    if p.get("status") != "running":
                         item["status"] = "completed"
+                elif p.get("status") == "running":
+                    item["status"] = "running"
+                elif p.get("status") == "stopped":
+                    item["status"] = "stopped"
                 elif p.get("status") == "ready_for_preview":
                     item["total_duration"] = cut_dur
                     if item["status"] not in ("completed", "exported"):
@@ -992,45 +1006,52 @@ def _sync_batch_items(batch_id: str) -> Optional[Dict[str, Any]]:
 
 
 def _run_batch_worker(batch_id: str, max_keep: int = 25):
+    """
+    Execute multiple celebrity Tabs concurrently in parallel (`max_workers = 3`),
+    so when a user runs 3 celebrities (e.g. Amy Winehouse, Michael Jackson, Fred Rogers),
+    ALL 3 Tabs run simultaneously instead of waiting one by one!
+    """
     with PROJECTS_LOCK:
         b = BATCHES.get(batch_id)
         if not b:
             return
         pids_ordered = [(it.get("project_id"), bool(it.get("skip_worker"))) for it in b["items"]]
 
-    for pid, skip_flag in pids_ordered:
+    runnable_pids = [pid for pid, skip_flag in pids_ordered if pid and not skip_flag]
+
+    def _run_single_celeb_in_batch(pid: str):
         if is_pipeline_cancelled():
-            with PROJECTS_LOCK:
-                if batch_id in BATCHES:
-                    BATCHES[batch_id]["status"] = "stopped"
-            _save_batches_state()
             return
-        if not pid or skip_flag:
-            continue
         with PROJECTS_LOCK:
             b = BATCHES.get(batch_id)
             if not b or b.get("status") == "stopped":
                 return
-            # Find current index of pid (since user may have removed a row dynamically)
             matching_indices = [i for i, it in enumerate(b["items"]) if it.get("project_id") == pid]
             if not matching_indices:
-                continue
+                return
             idx = matching_indices[0]
             b["current_index"] = idx
             item = b["items"][idx]
             item["status"] = "running"
+            if item.get("progress_pct", 0) < 5:
+                item["progress_pct"] = 5
             if pid in PROJECTS:
                 PROJECTS[pid]["status"] = "running"
+                if PROJECTS[pid].get("progress_pct", 0) < 5:
+                    PROJECTS[pid]["progress_pct"] = 5
         _save_batches_state()
+        _save_project_state(pid)
 
         try:
-            # Rule 4: Do NOT auto-render MP4 during batch run; stop at ready_for_preview so user can inspect & click Export / Export All!
             _run_full_pipeline_worker(pid, auto_render=False)
             if is_pipeline_cancelled():
                 with PROJECTS_LOCK:
                     if batch_id in BATCHES:
                         BATCHES[batch_id]["status"] = "stopped"
+                    if pid in PROJECTS:
+                        PROJECTS[pid]["status"] = "stopped"
                 _save_batches_state()
+                _save_project_state(pid)
                 return
             with PROJECTS_LOCK:
                 b = BATCHES.get(batch_id)
@@ -1056,6 +1077,16 @@ def _run_batch_worker(batch_id: str, max_keep: int = 25):
                             it["status"] = "stopped" if "PIPELINE_CANCELLED" in str(e) else "error"
                             it["error"] = None if "PIPELINE_CANCELLED" in str(e) else str(e)
         _save_batches_state()
+
+    if runnable_pids:
+        celeb_workers = min(3, max(1, len(runnable_pids)))
+        with ThreadPoolExecutor(max_workers=celeb_workers) as batch_pool:
+            futs = [batch_pool.submit(_run_single_celeb_in_batch, pid) for pid in runnable_pids]
+            for fut in as_completed(futs):
+                try:
+                    fut.result()
+                except Exception:
+                    pass
 
     with PROJECTS_LOCK:
         if batch_id in BATCHES and BATCHES[batch_id].get("status") != "stopped":
@@ -2650,6 +2681,9 @@ def _schedule_server_restart():
     """
     Restart the server process cleanly on Windows after returning the HTTP response:
     - Works in BOTH raw Python mode and frozen PyInstaller `.exe` mode.
+    - Uses a temporary `.bat` file in WORKSPACE_DIR instead of `cmd /c start "" "..."` so Python's
+      `list2cmdline` quote escaping never turns `""` into `\"\"` (which caused Windows Explorer to show
+      `\\\\ The network path was not found`).
     """
     def _restart_worker():
         time.sleep(0.6)
@@ -2657,9 +2691,13 @@ def _schedule_server_restart():
         try:
             if getattr(sys, "frozen", False):
                 exe_path = os.path.abspath(sys.executable)
-                cmd_str = f'timeout /t 2 /nobreak >nul & start "" "{exe_path}" --no-browser'
+                restart_bat = os.path.join(WORKSPACE_DIR, "_restart_exe.bat")
+                with open(restart_bat, "w", encoding="utf-8") as bf:
+                    bf.write("@echo off\r\n")
+                    bf.write("ping 127.0.0.1 -n 3 >nul\r\n")
+                    bf.write(f'start "" "{exe_path}" --no-browser\r\n')
                 subprocess.Popen(
-                    ["cmd", "/c", cmd_str],
+                    ["cmd.exe", "/c", restart_bat],
                     cwd=BASE_DIR,
                     creationflags=creation_flags,
                 )

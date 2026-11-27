@@ -21,6 +21,7 @@ _EXE_ROOT_DIR = (
 )
 
 PIPELINE_CANCEL_EVENT = threading.Event()
+YOUTUBE_DL_SEMAPHORE = threading.Semaphore(5)
 
 
 def request_pipeline_cancel():
@@ -438,8 +439,11 @@ def download_youtube_section(
     })
 
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
+        with YOUTUBE_DL_SEMAPHORE:
+            if is_pipeline_cancelled():
+                raise RuntimeError("PIPELINE_CANCELLED")
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
 
         for ext in [".mp4", ".mkv", ".webm"]:
             cand = temp_base + ext
@@ -485,8 +489,11 @@ def download_youtube_section(
             "ffmpeg_location": os.path.dirname(FFMPEG_BIN),
             "progress_hooks": [_cancel_hook],
         })
-        with yt_dlp.YoutubeDL(ydl_opts_full) as ydl:
-            ydl.download([url])
+        with YOUTUBE_DL_SEMAPHORE:
+            if is_pipeline_cancelled():
+                raise RuntimeError("PIPELINE_CANCELLED")
+            with yt_dlp.YoutubeDL(ydl_opts_full) as ydl:
+                ydl.download([url])
         for ext in [".mp4", ".mkv", ".webm"]:
             cand = temp_base + "_full" + ext
             if os.path.exists(cand) and os.path.getsize(cand) > 5000:
@@ -546,8 +553,11 @@ def download_full_youtube_video(
         "progress_hooks": [_cancel_hook],
     })
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
+        with YOUTUBE_DL_SEMAPHORE:
+            if is_pipeline_cancelled():
+                raise RuntimeError("PIPELINE_CANCELLED")
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
         for ext in [".mp4", ".mkv", ".webm"]:
             cand = temp_base + ext
             if os.path.exists(cand) and os.path.getsize(cand) > 10000:

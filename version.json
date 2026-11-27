@@ -1,9 +1,9 @@
 {
-  "version": "ver 0.4",
-  "sha": "36bdacc94fe0013a2acc8d579dd1bab2c7bb76a3",
-  "short_sha": "36bdacc",
-  "message": "feat(CON-225): 3-stage multi-threading (4-thread Wikipedia scan, 3-thread parallel year cutting with atomic video claim, 4-thread FFmpeg MP4 render) (ver 0.4)",
-  "date": "2026-11-27 10:03:28 +0700",
+  "version": "ver 0.5",
+  "sha": "579437f83af552d64a98599051bfb7cb7a1c8e33",
+  "short_sha": "579437f",
+  "message": "feat(batch-mt): run up to 3 celebrity tabs simultaneously in parallel & fix auto-restart quote escaping (ver 0.5)",
+  "date": "2026-11-27 10:23:37 +0700",
   "author": "BachVu",
   "repo": "Bach1711/MASYS-CelebTimeline",
   "branch": "main"
