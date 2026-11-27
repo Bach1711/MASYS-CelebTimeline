@@ -1,4 +1,6 @@
 import os
+import io
+import csv
 import sys
 import re
 import time
@@ -10,10 +12,11 @@ import string
 import zipfile
 import threading
 import subprocess
+import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Any, List, Optional, Set, Tuple
 import requests
-from fastapi import FastAPI, HTTPException, Form, Request
+from fastapi import FastAPI, HTTPException, Form, Request, UploadFile, File
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
@@ -294,12 +297,14 @@ class LookupRequest(BaseModel):
     clip_count: Optional[int] = None
     exact_wiki_title: Optional[str] = None
     row_index: Optional[int] = None
+    folder_number: Optional[str] = None
     create_project: bool = True
     output_folder: Optional[str] = None
 
 
 class LookupBatchItem(BaseModel):
     row_index: int = 0
+    folder_number: Optional[str] = None
     name: str
     exact_wiki_title: Optional[str] = None
     existing_project_id: Optional[str] = None
@@ -314,6 +319,7 @@ class LookupBatchRequest(BaseModel):
 
 class StartPipelineRequest(BaseModel):
     name: str
+    folder_number: Optional[str] = None
     exact_wiki_title: Optional[str] = None
     output_folder: Optional[str] = None
     birth_year: Optional[int] = None
@@ -328,6 +334,7 @@ class StartPipelineRequest(BaseModel):
 
 class StartBatchItem(BaseModel):
     row_index: Optional[int] = None
+    folder_number: Optional[str] = None
     name: str
     wiki_title: Optional[str] = None
     exact_wiki_title: Optional[str] = None
@@ -344,6 +351,20 @@ class StartBatchRequest(BaseModel):
     year_clip_duration: float = 4.2
     auto_render: bool = False
     resume_unfinished: bool = False
+    max_parallel_celebs: int = 3
+
+
+class RenderRequest(BaseModel):
+    output_folder: Optional[str] = None
+    folder_number: Optional[str] = None
+    layout: str = "center_band"
+
+
+class SheetUrlParseRequest(BaseModel):
+    sheet_url: Optional[str] = None
+    raw_text: Optional[str] = None
+    start_row: int = 1
+    end_row: int = 30
 
 
 class SwapNewsRequest(BaseModel):
@@ -362,11 +383,6 @@ class SwapYearClipRequest(BaseModel):
     duration_sec: Optional[float] = None
     custom_url: Optional[str] = None
     new_year_label: Optional[int] = None
-
-
-class RenderRequest(BaseModel):
-    output_folder: Optional[str] = None
-    layout: str = "center_band"
 
 
 class MkdirRequest(BaseModel):
@@ -504,6 +520,7 @@ def api_lookup(req: LookupRequest):
     if req.create_project:
         p_req = StartPipelineRequest(
             name=req.name.strip(),
+            folder_number=req.folder_number,
             exact_wiki_title=req.exact_wiki_title,
             output_folder=output_folder,
             clip_count=req.clip_count,
@@ -514,6 +531,7 @@ def api_lookup(req: LookupRequest):
             p = PROJECTS[pid]
             info = json.loads(json.dumps(p["celeb_info"], default=str))
             info["project_id"] = pid
+            info["folder_number"] = p.get("folder_number") or (req.folder_number or "")
             info["recommended_years"] = p.get("years") or info.get("recommended_years") or []
         if info.get("reference_images"):
             info["local_portrait_url"] = _to_web_url(info["reference_images"][0])
@@ -582,16 +600,19 @@ def api_lookup_batch(req: LookupBatchRequest):
                 and not _is_celeb_info_incomplete(ex_ci)
             ):
                 pid = it.existing_project_id
-                if it.years:
-                    with PROJECTS_LOCK:
+                with PROJECTS_LOCK:
+                    if it.years:
                         PROJECTS[pid]["years"] = sorted(it.years)
-                    _save_project_state(pid)
+                    if it.folder_number is not None:
+                        PROJECTS[pid]["folder_number"] = str(it.folder_number).strip()
+                _save_project_state(pid)
 
         if not pid:
             # If previous scan was corrupted (1955-2026 / 0 reference images), ignore old auto-generated years!
             was_corrupted = bool(existing_p and _is_celeb_info_incomplete(existing_p.get("celeb_info")))
             p_req = StartPipelineRequest(
                 name=it.name.strip(),
+                folder_number=it.folder_number,
                 exact_wiki_title=it.exact_wiki_title,
                 years=None if was_corrupted else it.years,
                 output_folder=output_folder,
@@ -601,16 +622,20 @@ def api_lookup_batch(req: LookupBatchRequest):
 
         with PROJECTS_LOCK:
             p = PROJECTS[pid]
+            if it.folder_number is not None and str(it.folder_number).strip():
+                p["folder_number"] = str(it.folder_number).strip()
             ci = p["celeb_info"]
             p_status = p.get("status", "scanned")
             p_pct = p.get("progress_pct", 0)
             p_msg = p.get("progress_message", "Đã quét thông tin — Sẵn sàng tạo video")
             p_fv = p.get("final_video") or {}
+            p_fn = p.get("folder_number") or (it.folder_number or "")
             p_ser = _serialize_project(p) if idx == 0 else {}
 
         local_portrait = _to_web_url(ci["reference_images"][0]) if ci.get("reference_images") else (ci.get("portrait_url") or "")
         scanned_row = {
             "row_index": it.row_index,
+            "folder_number": str(p_fn).strip(),
             "input_name": it.name.strip(),
             "project_id": pid,
             "name": ci.get("name") or it.name.strip(),
@@ -629,6 +654,7 @@ def api_lookup_batch(req: LookupBatchRequest):
         b_item = {
             "index": idx,
             "row_index": it.row_index,
+            "folder_number": scanned_row["folder_number"],
             "name": scanned_row["name"],
             "display_name": scanned_row["name"],
             "wiki_title": scanned_row["wiki_title"],
@@ -785,6 +811,7 @@ def _create_project_record(
             else f"Đang khởi tạo {len(celeb_info.get('reference_images', []))} ảnh khuôn mặt mẫu AI cho {celeb_info['name']} ({celeb_info['birth_year']}–{celeb_info['death_year']})..."
         ),
         "celeb_info": celeb_info,
+        "folder_number": str(req.folder_number or "").strip(),
         "output_folder": output_folder,
         "years": years,
         "news_duration": req.news_duration,
@@ -935,7 +962,7 @@ def api_start_batch(req: StartBatchRequest):
     batch_items = []
     first_proj = None
     running_assigned_count = 0
-    BATCH_MAX_PARALLEL_CELEBS = 3
+    BATCH_MAX_PARALLEL_CELEBS = max(1, min(8, int(req.max_parallel_celebs or 3)))
     pids_to_mark_active: List[str] = []
 
     # Pre-create (or reuse scanned/cut) project records for ALL items upfront so every tab is immediately clickable without any popup!
@@ -943,11 +970,14 @@ def api_start_batch(req: StartBatchRequest):
         pid = entry.project_id
         wiki_t = entry.exact_wiki_title or entry.wiki_title
         r_idx = entry.row_index if entry.row_index is not None else idx
+        fn_str = str(entry.folder_number or "").strip()
         p_existing = _ensure_project_loaded(pid)
 
         if p_existing and preserve_already_cut and already_cut_flags[idx]:
             with PROJECTS_LOCK:
                 p_obj = PROJECTS[pid]
+                if fn_str:
+                    p_obj["folder_number"] = fn_str
                 disp_name = (p_obj.get("celeb_info") or {}).get("name") or entry.name.strip()
                 fv = p_obj.get("final_video") or {}
                 item_status = "completed" if fv.get("output_path") else "ready_for_preview"
@@ -957,6 +987,7 @@ def api_start_batch(req: StartBatchRequest):
                 {
                     "index": idx,
                     "row_index": r_idx,
+                    "folder_number": fn_str or str((p_existing or {}).get("folder_number") or ""),
                     "name": entry.name.strip(),
                     "display_name": disp_name,
                     "wiki_title": wiki_t or disp_name,
@@ -1003,6 +1034,8 @@ def api_start_batch(req: StartBatchRequest):
                         ]
             with PROJECTS_LOCK:
                 p = PROJECTS[pid]
+                if fn_str:
+                    p["folder_number"] = fn_str
                 p["output_folder"] = output_folder
                 p["auto_render"] = bool(req.auto_render)
                 p["status"] = "running" if start_immediately else "queued"
@@ -1025,6 +1058,7 @@ def api_start_batch(req: StartBatchRequest):
         else:
             p_req = StartPipelineRequest(
                 name=entry.name.strip(),
+                folder_number=fn_str,
                 exact_wiki_title=wiki_t,
                 years=entry.years,
                 output_folder=output_folder,
@@ -1051,6 +1085,7 @@ def api_start_batch(req: StartBatchRequest):
             {
                 "index": idx,
                 "row_index": r_idx,
+                "folder_number": fn_str or str((p_obj or {}).get("folder_number") or ""),
                 "name": entry.name.strip(),
                 "display_name": disp_name,
                 "wiki_title": wiki_t or disp_name,
@@ -1078,6 +1113,7 @@ def api_start_batch(req: StartBatchRequest):
         "created_at": time.time(),
         "status": "running",
         "auto_render": bool(req.auto_render),
+        "max_parallel_celebs": BATCH_MAX_PARALLEL_CELEBS,
         "output_folder": output_folder,
         "news_duration": req.news_duration,
         "year_clip_duration": req.year_clip_duration,
@@ -1181,6 +1217,7 @@ def _run_batch_worker(batch_id: str, max_keep: int = 25):
             ACTIVE_RUNNING_BATCH_IDS.discard(batch_id)
             return
         batch_auto_render = bool(b.get("auto_render", False))
+        batch_max_parallel = max(1, min(8, int(b.get("max_parallel_celebs") or 3)))
         pids_ordered = [(it.get("project_id"), bool(it.get("skip_worker"))) for it in b["items"]]
 
     runnable_pids = [pid for pid, skip_flag in pids_ordered if pid and not skip_flag]
@@ -1259,7 +1296,7 @@ def _run_batch_worker(batch_id: str, max_keep: int = 25):
 
     try:
         if runnable_pids:
-            celeb_workers = min(3, max(1, len(runnable_pids)))
+            celeb_workers = min(batch_max_parallel, max(1, len(runnable_pids)))
             with ThreadPoolExecutor(max_workers=celeb_workers) as batch_pool:
                 futs = [batch_pool.submit(_run_single_celeb_in_batch, pid) for pid in runnable_pids]
                 for fut in as_completed(futs):
@@ -2611,11 +2648,17 @@ def _render_project_internal(
     project_id: str,
     output_folder: Optional[str] = None,
     layout: str = "center_band",
-    allow_missing_news: bool = False,
+    allow_missing_news: bool = True,
+    folder_number: Optional[str] = None,
 ) -> Dict[str, Any]:
     proj = _ensure_project_loaded(project_id)
     if not proj:
         raise HTTPException(status_code=404, detail="Không tìm thấy dự án.")
+
+    if folder_number is not None and str(folder_number).strip():
+        with PROJECTS_LOCK:
+            PROJECTS[project_id]["folder_number"] = str(folder_number).strip()
+            proj = PROJECTS[project_id]
 
     news_clip = proj.get("news_clip")
     is_news_cleared = bool(news_clip and news_clip.get("status") == "cleared")
@@ -2636,15 +2679,21 @@ def _render_project_internal(
         for yc in proj.get("year_clips", [])
         if yc.get("status") == "ready" and yc.get("clip_path") and os.path.exists(yc["clip_path"])
     ]
-    if not ready_year_clips:
-        raise HTTPException(status_code=400, detail="Chưa có đoạn video theo năm nào sẵn sàng để ghép.")
+    if not ready_year_clips and not has_valid_news:
+        raise HTTPException(status_code=400, detail="Chưa có đoạn video nào sẵn sàng để ghép.")
 
     pdir = _project_dir(project_id)
     celeb = proj["celeb_info"]
     safe_celeb = re.sub(r'[<>:"/\\|?*]', "", celeb["name"]).strip()
     by = celeb.get("birth_year", "")
     dy = celeb.get("death_year", "")
-    out_filename = f"{safe_celeb} {by}-{dy}.mp4".strip()
+
+    raw_fn = str(folder_number if (folder_number is not None and str(folder_number).strip()) else (proj.get("folder_number") or "")).strip()
+    clean_fn = re.sub(r'[<>:"/\\|?*]', "", raw_fn).strip().rstrip(".")
+    if clean_fn:
+        out_filename = f"{clean_fn}.{safe_celeb}.mp4".strip()
+    else:
+        out_filename = f"{safe_celeb} {by}-{dy}.mp4".strip()
 
     target_folder = (output_folder or proj.get("output_folder") or DEFAULT_OUTPUT_DIR).strip()
     try:
@@ -2769,8 +2818,360 @@ def api_render_project(project_id: str, req: RenderRequest):
         project_id=project_id,
         output_folder=req.output_folder,
         layout=req.layout,
-        allow_missing_news=False,
+        allow_missing_news=True,
+        folder_number=req.folder_number,
     )
+
+
+class RenderManyItem(BaseModel):
+    project_id: str
+    folder_number: Optional[str] = None
+    name: Optional[str] = None
+
+
+class RenderManyRequest(BaseModel):
+    items: List[RenderManyItem]
+    output_folder: Optional[str] = None
+    batch_id: Optional[str] = None
+    layout: str = "center_band"
+
+
+@app.post("/api/projects/render-many")
+def api_render_many_projects(req: RenderManyRequest):
+    """
+    Universal '📦 Xuất Tất Cả MP4' endpoint that exports all ready celebrity tabs
+    (whether started via a batch or scanned/edited individually), applying each row's folder_number prefix!
+    """
+    target_folder = (req.output_folder or DEFAULT_OUTPUT_DIR).strip() or DEFAULT_OUTPUT_DIR
+    exported_files = []
+    errors = []
+
+    for it in (req.items or []):
+        pid = (it.project_id or "").strip()
+        if not pid:
+            continue
+        try:
+            proj_ser = _render_project_internal(
+                project_id=pid,
+                output_folder=target_folder,
+                layout=req.layout,
+                allow_missing_news=True,
+                folder_number=it.folder_number,
+            )
+            fv = proj_ser.get("final_video") or {}
+            if fv.get("output_path"):
+                exported_files.append(
+                    {
+                        "project_id": pid,
+                        "name": (proj_ser.get("celeb_info") or {}).get("name") or it.name or pid,
+                        "output_path": fv["output_path"],
+                        "total_duration": fv.get("total_duration", 0.0),
+                        "file_size_mb": fv.get("file_size_mb", 0.0),
+                    }
+                )
+        except Exception as e:
+            errors.append(f"{it.name or pid}: {e}")
+
+    batch_state = None
+    if req.batch_id:
+        with PROJECTS_LOCK:
+            if req.batch_id in BATCHES and exported_files:
+                BATCHES[req.batch_id]["status"] = "completed"
+        _save_batches_state()
+        batch_state = _sync_batch_items(req.batch_id)
+
+    if not exported_files and errors:
+        raise HTTPException(status_code=400, detail="Không thể xuất video: " + "; ".join(errors[:3]))
+
+    return {
+        "ok": True,
+        "batch": batch_state,
+        "exported_count": len(exported_files),
+        "rendered": exported_files,
+        "exported_files": exported_files,
+        "errors": errors,
+        "output_folder": target_folder,
+    }
+
+
+def _parse_xlsx_bytes_to_rows(raw_bytes: bytes) -> List[List[str]]:
+    """
+    Pure standard-library `.xlsx` reader using `zipfile` + `xml.etree.ElementTree`
+    so `.xlsx` files can be imported on any client PC without requiring `openpyxl` or `pandas`!
+    """
+    rows_out: List[List[str]] = []
+    with zipfile.ZipFile(io.BytesIO(raw_bytes)) as zf:
+        shared_strings: List[str] = []
+        if "xl/sharedStrings.xml" in zf.namelist():
+            root_ss = ET.fromstring(zf.read("xl/sharedStrings.xml"))
+            for si in root_ss.iter():
+                if si.tag.endswith("}si") or si.tag == "si":
+                    texts = [t.text or "" for t in si.iter() if t.tag.endswith("}t") or t.tag == "t"]
+                    shared_strings.append("".join(texts))
+
+        sheet_files = sorted(
+            [n for n in zf.namelist() if n.startswith("xl/worksheets/sheet") and n.endswith(".xml")]
+        )
+        if not sheet_files:
+            return rows_out
+
+        root_sh = ET.fromstring(zf.read(sheet_files[0]))
+
+        def _col_letters_to_idx(cell_ref: str) -> int:
+            letters = "".join(ch for ch in cell_ref if ch.isalpha()).upper()
+            idx_val = 0
+            for ch in letters:
+                idx_val = idx_val * 26 + (ord(ch) - ord("A") + 1)
+            return max(0, idx_val - 1)
+
+        for row_el in root_sh.iter():
+            if not (row_el.tag.endswith("}row") or row_el.tag == "row"):
+                continue
+            row_cells: Dict[int, str] = {}
+            max_c = -1
+            for c_el in row_el:
+                if not (c_el.tag.endswith("}c") or c_el.tag == "c"):
+                    continue
+                c_ref = c_el.attrib.get("r", "")
+                c_idx = _col_letters_to_idx(c_ref) if c_ref else (max_c + 1)
+                c_type = c_el.attrib.get("t", "")
+                val_str = ""
+                if c_type == "inlineStr":
+                    texts = [t.text or "" for t in c_el.iter() if t.tag.endswith("}t") or t.tag == "t"]
+                    val_str = "".join(texts)
+                else:
+                    v_el = next((ch for ch in c_el if ch.tag.endswith("}v") or ch.tag == "v"), None)
+                    if v_el is not None and v_el.text is not None:
+                        raw_v = v_el.text.strip()
+                        if c_type == "s":
+                            try:
+                                val_str = shared_strings[int(raw_v)]
+                            except Exception:
+                                val_str = raw_v
+                        else:
+                            val_str = raw_v
+                row_cells[c_idx] = val_str.strip()
+                if c_idx > max_c:
+                    max_c = c_idx
+            if max_c >= 0:
+                rows_out.append([row_cells.get(i, "") for i in range(max_c + 1)])
+            else:
+                rows_out.append([])
+    return rows_out
+
+
+def _extract_stt_and_celeb_from_rows(
+    all_rows: List[List[str]],
+    start_row: int,
+    end_row: int,
+) -> List[Dict[str, Any]]:
+    """
+    Given a 2D table of strings (from Google Sheets CSV, local CSV/TSV, or XLSX) and a 1-based row range
+    `[start_row, end_row]` (e.g. 115 to 130):
+    Automatically extract `{sheet_row, folder_number, name}` for each row.
+    Supports both:
+    - Filter by actual spreadsheet row index `start_row..end_row` (1-based)
+    - OR if the spreadsheet has fewer rows / offset headers, also matches rows whose STT column equals `start_row..end_row`.
+    """
+    if not all_rows:
+        return []
+    s_row = max(1, int(start_row or 1))
+    e_row = max(s_row, int(end_row or s_row))
+
+    HEADER_KEYWORDS = {
+        "stt", "no", "no.", "id", "index", "folder", "mã", "số",
+        "name", "tên", "nhân vật", "celebrity", "celeb", "person", "star", "title", "artist",
+    }
+
+    def _parse_single_row(sheet_row_num: int, cells: List[str]) -> Optional[Dict[str, Any]]:
+        non_empty = [(i, str(c or "").strip()) for i, c in enumerate(cells) if str(c or "").strip()]
+        if not non_empty:
+            return None
+        # Skip obvious header row
+        if sheet_row_num == 1 and all(v.lower().rstrip(":.") in HEADER_KEYWORDS for _, v in non_empty[:3]):
+            return None
+
+        folder_num: Optional[str] = None
+        celeb_name: Optional[str] = None
+
+        # Case 1: Single column like "152. Patrick Stewart" or "152 - Patrick Stewart" or "Patrick Stewart"
+        if len(non_empty) == 1:
+            val = non_empty[0][1]
+            m_comb = re.match(r"^\s*#?(\d{1,5})\s*[.\-–—:|)\]]+\s*(.+)$", val)
+            if m_comb:
+                folder_num = m_comb.group(1).strip()
+                celeb_name = m_comb.group(2).strip()
+            else:
+                celeb_name = val.strip()
+        else:
+            # Multi-column: look for a numeric STT column and a human name column
+            for col_i, val in non_empty:
+                clean_v = re.sub(r"^[#No.\s]+", "", val, flags=re.IGNORECASE).strip().rstrip(".")
+                if folder_num is None and re.match(r"^\d{1,5}$", clean_v):
+                    folder_num = clean_v
+                    continue
+                # Check if cell contains "152. Patrick Stewart"
+                m_comb = re.match(r"^\s*#?(\d{1,5})\s*[.\-–—:|)\]]+\s*([A-Za-zÀ-ỹ].+)$", val)
+                if m_comb and celeb_name is None:
+                    if folder_num is None:
+                        folder_num = m_comb.group(1).strip()
+                    celeb_name = m_comb.group(2).strip()
+                    continue
+                # Candidate for celebrity name: contains letters, not a URL, not purely year range
+                if (
+                    celeb_name is None
+                    and re.search(r"[A-Za-zÀ-ỹ]{2,}", val)
+                    and not val.lower().startswith(("http://", "https://", "www.", "drive.google"))
+                    and not re.match(r"^\d{4}\s*[-–—]\s*\d{4}$", val)
+                    and val.lower().rstrip(":.") not in HEADER_KEYWORDS
+                ):
+                    celeb_name = val.strip()
+
+        if not celeb_name:
+            return None
+
+        # Clean up any trailing year ranges or notes in parentheses if user only wants celebrity name
+        celeb_name = re.sub(r"^\s*#?\d{1,5}\s*[.\-–—:|)\]]+\s*", "", celeb_name).strip()
+        if not celeb_name:
+            return None
+
+        return {
+            "sheet_row": sheet_row_num,
+            "folder_number": folder_num if folder_num is not None else str(sheet_row_num),
+            "raw_stt": folder_num,
+            "name": celeb_name,
+        }
+
+    parsed_all: List[Dict[str, Any]] = []
+    for idx_zero, row_cells in enumerate(all_rows):
+        p_item = _parse_single_row(idx_zero + 1, row_cells)
+        if p_item:
+            parsed_all.append(p_item)
+
+    # First check: match by STT column value in [s_row, e_row] OR by 1-based sheet_row in [s_row, e_row]
+    by_sheet_row = [x for x in parsed_all if s_row <= x["sheet_row"] <= e_row]
+    by_stt_val = [
+        x for x in parsed_all
+        if x.get("raw_stt") and x["raw_stt"].isdigit() and s_row <= int(x["raw_stt"]) <= e_row
+    ]
+
+    # Prefer `by_sheet_row` if it returns items, unless `by_stt_val` is a cleaner exact match when header offset exists
+    chosen = by_sheet_row if len(by_sheet_row) >= len(by_stt_val) and by_sheet_row else (by_stt_val or by_sheet_row)
+    return chosen
+
+
+def _parse_csv_or_tsv_text(text: str) -> List[List[str]]:
+    text_clean = text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+    lines = [ln for ln in text_clean.split("\n")]
+    if not lines:
+        return []
+    sample = "\n".join(lines[:15])
+    delim = ","
+    if "\t" in sample and sample.count("\t") >= sample.count(","):
+        delim = "\t"
+    elif ";" in sample and sample.count(";") > sample.count(","):
+        delim = ";"
+    reader = csv.reader(io.StringIO(text_clean), delimiter=delim)
+    return [list(r) for r in reader]
+
+
+@app.post("/api/sheet/parse-url")
+def api_parse_sheet_url(req: SheetUrlParseRequest):
+    """
+    Fetch a shared Google Sheets URL (or raw pasted lines) and extract rows from `start_row` to `end_row`
+    (e.g. row 115 to 130), returning `{folder_number, name, sheet_row}` for each celebrity.
+    """
+    all_rows: List[List[str]] = []
+
+    if req.sheet_url and req.sheet_url.strip():
+        raw_url = req.sheet_url.strip()
+        m_id = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", raw_url)
+        if m_id:
+            doc_id = m_id.group(1)
+            m_gid = re.search(r"[#&?]gid=(\d+)", raw_url)
+            gid = m_gid.group(1) if m_gid else "0"
+            export_urls = [
+                f"https://docs.google.com/spreadsheets/d/{doc_id}/export?format=csv&gid={gid}",
+                f"https://docs.google.com/spreadsheets/d/{doc_id}/gviz/tq?tqx=out:csv&gid={gid}",
+            ]
+        else:
+            export_urls = [raw_url]
+
+        csv_text = None
+        last_err = ""
+        for u in export_urls:
+            try:
+                resp = requests.get(
+                    u,
+                    headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0"},
+                    timeout=15,
+                )
+                if resp.ok and resp.text and "<!DOCTYPE html>" not in resp.text[:300]:
+                    resp.encoding = "utf-8"
+                    csv_text = resp.text
+                    break
+                elif "<!DOCTYPE html>" in (resp.text or "")[:300] or resp.status_code in (401, 403):
+                    last_err = "File Google Sheet này chưa bật chia sẻ công khai ('Bất kỳ ai có đường liên kết đều có thể xem')."
+                else:
+                    last_err = f"HTTP {resp.status_code}"
+            except Exception as e:
+                last_err = str(e)
+
+        if not csv_text:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Không thể đọc Google Sheet ({last_err}). Hãy kiểm tra đã bật chia sẻ 'Bất kỳ ai có liên kết đều có thể xem' (Anyone with the link) chưa!",
+            )
+        all_rows = _parse_csv_or_tsv_text(csv_text)
+    elif req.raw_text and req.raw_text.strip():
+        all_rows = _parse_csv_or_tsv_text(req.raw_text)
+    else:
+        raise HTTPException(status_code=400, detail="Vui lòng dán link Google Sheet hoặc chọn file Sheet từ máy tính.")
+
+    items = _extract_stt_and_celeb_from_rows(all_rows, req.start_row, req.end_row)
+    return {
+        "ok": True,
+        "total_sheet_rows": len(all_rows),
+        "start_row": req.start_row,
+        "end_row": req.end_row,
+        "count": len(items),
+        "items": items,
+    }
+
+
+@app.post("/api/sheet/parse-file")
+async def api_parse_sheet_file(
+    file: UploadFile = File(...),
+    start_row: int = Form(1),
+    end_row: int = Form(30),
+):
+    """
+    Upload & parse a local `.xlsx`, `.csv`, `.tsv`, or `.txt` file and extract rows from `start_row` to `end_row`.
+    """
+    raw_bytes = await file.read()
+    fname = (file.filename or "").lower()
+    if fname.endswith(".xlsx"):
+        try:
+            all_rows = _parse_xlsx_bytes_to_rows(raw_bytes)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Không thể đọc file Excel (.xlsx): {e}")
+    else:
+        try:
+            text_content = raw_bytes.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text_content = raw_bytes.decode("cp1258", errors="replace")
+        all_rows = _parse_csv_or_tsv_text(text_content)
+
+    items = _extract_stt_and_celeb_from_rows(all_rows, start_row, end_row)
+    return {
+        "ok": True,
+        "filename": file.filename,
+        "total_sheet_rows": len(all_rows),
+        "start_row": start_row,
+        "end_row": end_row,
+        "count": len(items),
+        "items": items,
+    }
 
 
 @app.get("/api/projects/{project_id}/final-video")

@@ -84,6 +84,27 @@
 
           <div class="flex items-center gap-2 flex-wrap">
             <button
+              id="btnOpenSheetModal"
+              type="button"
+              onclick="openSheetImportModal()"
+              class="px-3.5 py-2.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-900 text-xs font-black shadow-2xs transition cursor-pointer"
+              title="Nạp danh sách Số thứ tự & Tên nhân vật từ link Google Sheet hoặc file Excel/CSV theo khoảng dòng (VD: dòng 115 đến 130)"
+            >
+              📊 Nạp File Sheet
+            </button>
+            <div class="flex items-center gap-1 px-2.5 py-2 rounded-xl bg-slate-100 border border-slate-300 text-xs" title="Số lượng nhân vật chạy song song cùng lúc (Mặc định 3 luồng là ổn định và an toàn nhất)">
+              <span class="font-bold text-slate-600">⚡ Đa luồng:</span>
+              <select
+                id="maxParallelCelebsSelect"
+                onchange="saveUiState()"
+                class="bg-transparent font-extrabold text-indigo-700 focus:outline-none cursor-pointer"
+              >
+                <option value="3" selected>3 video (Chuẩn)</option>
+                <option value="4">4 video (Nhanh)</option>
+                <option value="5">5 video (Tối đa)</option>
+              </select>
+            </div>
+            <button
               id="btnFullAutoTrigger"
               type="button"
               onclick="runFullAutoTrigger()"
@@ -134,10 +155,19 @@
               type="button"
               onclick="renderFinalVideo()"
               class="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold shadow-sm transition cursor-pointer"
-              title="Xuất file MP4 cho Tab nhân vật đang mở sau khi bạn đã kiểm nghiệm các cảnh"
+              title="Xuất file MP4 cho riêng Tab nhân vật đang mở (hoặc Xuất đè lại MP4 khi bạn vừa sửa cảnh)"
             >
-              <span id="btnRenderLabel">💾 3. Xuất Video</span>
+              <span id="btnRenderLabel">💾 3. Xuất Video Tab này</span>
               <span id="btnExportDuration"></span>
+            </button>
+            <button
+              id="btnRenderAllTop"
+              type="button"
+              onclick="renderAllBatchVideos()"
+              class="px-4 py-2.5 rounded-xl bg-teal-700 hover:bg-teal-800 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-black shadow-sm transition cursor-pointer"
+              title="Xuất hàng loạt tất cả các Tab nhân vật đã cắt xong ra file MP4 (kèm mã số STT đầu file)"
+            >
+              📦 Xuất Tất Cả MP4
             </button>
             <button
               id="btnClearAll"
@@ -152,30 +182,40 @@
         </div>
       </div>
 
-      <!-- 3-to-20 Row Celebrity Input & Disambiguation Approval Table -->
+      <!-- 3-to-30 Row Celebrity Input & Disambiguation Approval Table -->
       <div class="pt-2 border-t border-slate-100 space-y-2">
         <div class="flex items-center justify-between gap-2 flex-wrap">
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-2 flex-wrap">
             <span class="text-xs font-bold text-slate-800">📋 Bảng Nhập & Duyệt Nhân Vật</span>
             <span class="text-[11px] text-slate-500">
-              (Điền bao nhiêu hàng thì quét & làm bấy nhiêu người • Hỗ trợ dán nhiều dòng cùng lúc • Bấm <strong>🔍 1. Quét Nhân Vật</strong> để duyệt đúng người trước khi chạy)
+              (Điền Mã số STT ở cột đầu để xuất file dạng <strong>152.Patrick Stewart.mp4</strong> • Gõ số hàng đầu rồi bấm <strong>🔢 Đánh số tiếp</strong> hoặc bấm <strong>📊 Nạp File Sheet</strong>)
             </span>
           </div>
-          <button
-            id="btnToggleTableRows"
-            type="button"
-            onclick="toggleTableExpand()"
-            class="px-3 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 text-xs font-bold transition cursor-pointer"
-          >
-            🔽 Mở rộng bảng (20 hàng)
-          </button>
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              onclick="autoNumberTableRows()"
+              class="px-2.5 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-900 text-xs font-bold transition cursor-pointer"
+              title="Lấy số thứ tự ở hàng đầu tiên (VD: 152) và tự động đánh số tăng dần (153, 154...) cho các hàng bên dưới"
+            >
+              🔢 Tự đánh STT tăng dần
+            </button>
+            <button
+              id="btnToggleTableRows"
+              type="button"
+              onclick="toggleTableExpand()"
+              class="px-3 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 text-xs font-bold transition cursor-pointer"
+            >
+              🔽 Mở rộng bảng (30 hàng)
+            </button>
+          </div>
         </div>
 
         <div id="celebTableScrollWrap" class="border border-slate-200 rounded-xl overflow-hidden bg-slate-50 max-h-80 overflow-y-auto">
           <table class="w-full text-left border-collapse text-xs">
             <thead class="bg-slate-100 text-slate-600 border-b border-slate-200 sticky top-0 z-10">
               <tr>
-                <th class="py-2 px-2.5 w-10 text-center font-bold">#</th>
+                <th class="py-2 px-2 w-24 text-center font-bold" title="Điền số thứ tự Folder Drive (VD: 152) để khi xuất file sẽ có tên 152.Tên Nhân Vật.mp4">📁 STT / Mã số</th>
                 <th class="py-2 px-2.5 w-60 font-bold">Tên nhân vật nhập vào</th>
                 <th class="py-2 px-2.5 font-bold">Thông tin Nhân vật Quét được & Chọn Duyệt (Wikipedia AI)</th>
                 <th class="py-2 px-2.5 w-64 font-bold">📅 Mốc năm (tự động / sửa tùy ý)</th>
@@ -183,60 +223,68 @@
               </tr>
             </thead>
             <tbody id="celebTableBody" class="divide-y divide-slate-200 bg-white">
-              <!-- Populated dynamically by JS (3 rows initially, expandable to 20 rows) -->
+              <!-- Populated dynamically by JS (3 rows initially, expandable to 30 rows) -->
             </tbody>
           </table>
         </div>
       </div>
 
-      <!-- Active Tab Celebrity Summary Bar -->
-      <div class="pt-2 border-t border-slate-100 flex items-center justify-between gap-3 flex-wrap text-xs">
-        <div class="flex items-center gap-2.5 flex-wrap">
-          <img
-            id="celebPortraitThumb"
-            src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='36' height='36'><rect width='100%' height='100%' fill='%23e2e8f0'/></svg>"
-            alt="AI Face"
-            class="w-7 h-7 rounded-full object-cover border border-amber-400 bg-slate-200 shrink-0"
-          />
-          <div>
-            <span class="text-slate-500 text-[11px]">Đang xem Tab:</span>
-            <span class="font-bold text-slate-900 ml-1" id="celebMetaName">Catherine O'Hara</span>
-            <span class="text-slate-500 ml-1" id="celebMetaSpan">(Tự động lấy mốc năm & thời lượng linh hoạt ~1 phút)</span>
+      <!-- Active Tab Celebrity Summary Box (Compact 2-Row Boxed Layout — Never Overflows!) -->
+      <div class="mt-2 bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-2 text-xs overflow-hidden">
+        <!-- Row 1: Avatar + Celebrity Info on Left, Quick Action Buttons on Right -->
+        <div class="flex items-center justify-between gap-2 flex-wrap">
+          <div class="flex items-center gap-2.5 min-w-0">
+            <img
+              id="celebPortraitThumb"
+              src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='36' height='36'><rect width='100%' height='100%' fill='%23e2e8f0'/></svg>"
+              alt="AI Face"
+              class="w-8 h-8 rounded-full object-cover border border-amber-400 bg-slate-200 shrink-0"
+            />
+            <div class="min-w-0">
+              <div class="flex items-center gap-1.5 flex-wrap">
+                <span class="text-slate-500 text-[11px]">Đang xem Tab:</span>
+                <span class="font-bold text-slate-900 text-xs" id="celebMetaName">Catherine O'Hara</span>
+                <span class="text-slate-500 text-[11px]" id="celebMetaSpan">(Tự động lấy mốc năm & thời lượng linh hoạt ~1 phút)</span>
+              </div>
+            </div>
           </div>
-          <button
-            id="btnWatchExportedQuick"
-            type="button"
-            onclick="openExportedVideoForProject(currentProjectId)"
-            class="hidden px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold shadow-xs transition cursor-pointer"
-            title="Xem ngay bản Video MP4 đã xuất của nhân vật này để kiểm tra chất lượng từng cảnh"
-          >
-            🎬 Xem Video Đã Xuất
-          </button>
-          <button
-            id="btnRerunCurrentCeleb"
-            type="button"
-            onclick="rerunCurrentCelebrity(false)"
-            class="hidden px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 text-[11px] font-bold transition cursor-pointer"
-            title="Tìm & cắt mới lại toàn bộ cảnh cho riêng nhân vật đang mở (không ảnh hưởng các Tab khác)"
-          >
-            🔄 Tìm mới lại nhân vật này
-          </button>
+          <div class="flex items-center gap-2 flex-wrap shrink-0">
+            <button
+              id="btnWatchExportedQuick"
+              type="button"
+              onclick="openExportedVideoForProject(currentProjectId)"
+              class="hidden px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold shadow-xs transition cursor-pointer"
+              title="Xem ngay bản Video MP4 đã xuất của nhân vật này để kiểm tra chất lượng từng cảnh"
+            >
+              🎬 Xem Video Đã Xuất
+            </button>
+            <button
+              id="btnRerunCurrentCeleb"
+              type="button"
+              onclick="rerunCurrentCelebrity(false)"
+              class="hidden px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 text-[11px] font-bold transition cursor-pointer"
+              title="Tìm & cắt mới lại toàn bộ cảnh cho riêng nhân vật đang mở (không ảnh hưởng các Tab khác)"
+            >
+              🔄 Tìm mới lại nhân vật này
+            </button>
+          </div>
         </div>
-        <div class="flex items-center gap-1.5 flex-1 max-w-2xl">
-          <label for="yearsListInput" class="text-slate-600 font-semibold shrink-0">📅 Mốc năm của Tab đang mở:</label>
+        <!-- Row 2: Full-Width Years Input + Update Years Button -->
+        <div class="flex items-center gap-2 pt-1.5 border-t border-slate-200/80 flex-wrap sm:flex-nowrap">
+          <label for="yearsListInput" class="text-slate-700 font-bold shrink-0 text-[11px]">📅 Mốc năm của Tab đang mở:</label>
           <input
             id="yearsListInput"
             type="text"
             value=""
             placeholder="Tự động theo nhân vật..."
             oninput="if(tableRowsData[activeTableRowIdx]){tableRowsData[activeTableRowIdx].years_str=this.value; renderCelebTable(); saveUiState();}"
-            class="flex-1 px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-300 text-slate-800 font-mono text-xs focus:outline-none focus:border-blue-500 focus:bg-white"
+            class="flex-1 min-w-0 px-2.5 py-1 rounded-lg bg-white border border-slate-300 text-slate-800 font-mono text-xs focus:outline-none focus:border-blue-500"
           />
           <button
             id="btnApplyUpdatedYears"
             type="button"
             onclick="applyUpdatedYearsForCurrentTab()"
-            class="px-2.5 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 text-[11px] font-bold shrink-0 transition cursor-pointer"
+            class="px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-bold shrink-0 transition cursor-pointer"
             title="Giữ nguyên các năm đã có cảnh và chỉ tìm thêm các năm bạn vừa sửa/thêm vào ô bên cạnh"
           >
             🔄 Cập nhật năm
@@ -539,6 +587,139 @@
       </div>
     </div>
 
+    <!-- Sheet Import Modal (Google Sheets Link or Local Excel/CSV File + Row Range 115..130) -->
+    <div
+      id="sheetImportModal"
+      class="hidden fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4"
+    >
+      <div class="bg-white border border-slate-200 rounded-2xl p-5 max-w-2xl w-full shadow-2xl space-y-4">
+        <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+          <div>
+            <h3 class="font-bold text-base text-slate-900">📊 Nạp Dữ Liệu Từ Google Sheet / File Excel (CSV, XLSX)</h3>
+            <p class="text-xs text-slate-500">Quét tự động <strong>Số thứ tự (STT)</strong> và <strong>Tên nhân vật</strong> theo khoảng dòng bạn chọn (VD: dòng 115 đến 130)</p>
+          </div>
+          <button
+            type="button"
+            onclick="closeSheetImportModal()"
+            class="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer"
+          >
+            ✕ Đóng
+          </button>
+        </div>
+
+        <!-- Row Range Selector (Top) -->
+        <div class="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-center justify-between gap-3 flex-wrap text-xs">
+          <div class="font-bold text-amber-950">🔢 Chọn khoảng dòng cần lấy từ Sheet:</div>
+          <div class="flex items-center gap-2">
+            <label class="font-semibold text-slate-700">Từ dòng:</label>
+            <input
+              id="sheetStartRowInput"
+              type="number"
+              min="1"
+              value="115"
+              class="w-24 px-2.5 py-1.5 rounded-lg bg-white border border-amber-300 text-slate-900 font-mono font-bold text-xs text-center"
+            />
+            <span class="font-bold text-slate-500">➔</span>
+            <label class="font-semibold text-slate-700">Đến dòng:</label>
+            <input
+              id="sheetEndRowInput"
+              type="number"
+              min="1"
+              value="130"
+              class="w-24 px-2.5 py-1.5 rounded-lg bg-white border border-amber-300 text-slate-900 font-mono font-bold text-xs text-center"
+            />
+          </div>
+        </div>
+
+        <!-- Source Option 1: Google Sheet Link -->
+        <div class="space-y-2 text-xs">
+          <label class="block font-bold text-slate-800">🔗 Cách 1: Dán Link Google Sheet (Đã bật chia sẻ "Bất kỳ ai có liên kết đều có thể xem")</label>
+          <div class="flex gap-2">
+            <input
+              id="sheetUrlInput"
+              type="text"
+              placeholder="https://docs.google.com/spreadsheets/d/1abc.../edit#gid=0"
+              class="flex-1 px-3 py-2 rounded-xl bg-slate-50 border border-slate-300 text-slate-800 font-mono text-xs focus:outline-none focus:border-blue-500 focus:bg-white"
+            />
+            <button
+              id="btnFetchSheetUrl"
+              type="button"
+              onclick="previewSheetFromUrl()"
+              class="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shrink-0 cursor-pointer transition"
+            >
+              🔍 Quét dòng từ Link
+            </button>
+          </div>
+        </div>
+
+        <!-- Source Option 2: Upload Local Excel/CSV File -->
+        <div class="space-y-2 text-xs pt-2 border-t border-slate-100">
+          <label class="block font-bold text-slate-800">📂 Cách 2: Hoặc Import trực tiếp file Sheet (.xlsx, .csv, .txt) từ máy tính</label>
+          <div class="flex items-center gap-2 flex-wrap">
+            <input
+              id="sheetFileInput"
+              type="file"
+              accept=".xlsx,.csv,.tsv,.txt"
+              onchange="previewSheetFromFile()"
+              class="flex-1 text-xs text-slate-700 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer"
+            />
+            <button
+              type="button"
+              onclick="previewSheetFromFile()"
+              class="px-3.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-800 font-bold text-xs cursor-pointer transition"
+            >
+              📥 Đọc lại file theo dòng
+            </button>
+          </div>
+        </div>
+
+        <!-- Preview List of Extracted Rows -->
+        <div class="space-y-1.5 text-xs">
+          <div class="flex items-center justify-between">
+            <span id="sheetPreviewStatus" class="font-bold text-slate-700">📋 Danh sách dòng quét được (Sẽ đổ vào Bảng Nhân Vật):</span>
+            <span id="sheetPreviewCountBadge" class="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold text-[11px]">0 dòng</span>
+          </div>
+          <div
+            id="sheetPreviewList"
+            class="h-48 overflow-y-auto border border-slate-200 rounded-xl bg-slate-50 p-2.5 space-y-1 text-xs font-mono text-slate-700"
+          >
+            <div class="text-slate-400 text-center py-14 font-sans">
+              Dán link Google Sheet rồi bấm <strong>"🔍 Quét dòng từ Link"</strong> (hoặc chọn file Excel/CSV ở Cách 2) để xem trước các dòng từ 115 đến 130.
+            </div>
+          </div>
+        </div>
+
+        <!-- Modal Footer Actions -->
+        <div class="flex items-center justify-between gap-2 pt-2 border-t border-slate-100 flex-wrap">
+          <button
+            type="button"
+            onclick="closeSheetImportModal()"
+            class="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer"
+          >
+            Hủy
+          </button>
+          <div class="flex items-center gap-2">
+            <button
+              id="btnConfirmSheetImport"
+              type="button"
+              onclick="applySheetRowsToTable(false)"
+              class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm cursor-pointer transition"
+            >
+              ✅ Đổ vào Bảng Nhân Vật
+            </button>
+            <button
+              id="btnConfirmSheetAndScan"
+              type="button"
+              onclick="applySheetRowsToTable(true)"
+              class="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black shadow-sm cursor-pointer transition"
+            >
+              ⚡ Đổ vào Bảng & Quét Wikipedia luôn
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Batch Switcher Bar (Visible right after Scanning or Running 1+ celebrities) -->
     <div
       id="batchSwitcherBar"
@@ -550,24 +731,6 @@
           <span id="batchSummaryText" class="text-xs font-bold text-slate-800">Đã quét nhân vật — Bấm vào từng Tab để xem tiến độ & kiểm nghiệm video</span>
         </div>
         <div class="flex items-center gap-2 flex-wrap">
-          <button
-            id="btnRenderCurrentTabQuick"
-            type="button"
-            onclick="renderFinalVideo()"
-            class="hidden px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs cursor-pointer transition"
-            title="Xuất file MP4 cho riêng Tab nhân vật đang mở"
-          >
-            💾 Xuất Video Tab này
-          </button>
-          <button
-            id="btnRenderAllBatch"
-            type="button"
-            onclick="renderAllBatchVideos()"
-            class="hidden px-3.5 py-1.5 rounded-lg bg-teal-700 hover:bg-teal-800 disabled:opacity-50 text-white text-xs font-black shadow-xs cursor-pointer transition"
-            title="Xuất hàng loạt tất cả các Tab nhân vật đã cắt xong ra file MP4"
-          >
-            💾 Xuất Tất Cả MP4
-          </button>
           <button
             type="button"
             onclick="openOutputFolder()"
@@ -599,11 +762,13 @@
     let lastLookedUpCeleb = "";
     let folderBrowserParentPath = "";
 
-    // --- 3-to-20 Row Table State ---
-    const MAX_TABLE_ROWS = 20;
+    // --- 3-to-30 Row Table State (Auto-expands if more rows are imported from Sheet) ---
+    let MAX_TABLE_ROWS = 30;
     let visibleRowsCount = 3;
     let activeTableRowIdx = 0;
+    let sheetPreviewItems = [];
     let tableRowsData = Array.from({ length: MAX_TABLE_ROWS }, () => ({
+      folder_number: "",
       name: "",
       wiki_title: null,
       years_str: "",
@@ -653,9 +818,33 @@
       if (btn) {
         btn.innerText = (visibleRowsCount === MAX_TABLE_ROWS)
           ? '🔼 Thu gọn bảng (3 hàng)'
-          : '🔽 Mở rộng bảng (20 hàng)';
+          : `🔽 Mở rộng bảng (${MAX_TABLE_ROWS} hàng)`;
       }
       renderCelebTable();
+      saveUiState();
+    }
+
+    function autoNumberTableRows() {
+      let baseNum = null;
+      for (let i = 0; i < MAX_TABLE_ROWS; i++) {
+        const fn = String(tableRowsData[i].folder_number || '').trim();
+        if (fn && /^\d+$/.test(fn)) {
+          baseNum = parseInt(fn, 10) - i;
+          break;
+        }
+      }
+      if (baseNum === null) {
+        const inp = prompt('Nhập số thứ tự bắt đầu cho Hàng #1 (VD: 152):', '1');
+        if (!inp || !/^\d+$/.test(inp.trim())) return;
+        baseNum = parseInt(inp.trim(), 10);
+      }
+      for (let i = 0; i < MAX_TABLE_ROWS; i++) {
+        if ((tableRowsData[i].name || '').trim() || i < visibleRowsCount) {
+          tableRowsData[i].folder_number = String(Math.max(1, baseNum + i));
+        }
+      }
+      renderCelebTable();
+      renderBatchSwitcher(currentBatch);
       saveUiState();
     }
 
@@ -679,14 +868,14 @@
       for (let i = 0; i < MAX_TABLE_ROWS; i++) {
         if ((tableRowsData[i].name || '').trim()) highestFilled = i + 1;
       }
-      const rowsToShow = Math.max(visibleRowsCount, highestFilled > 3 ? MAX_TABLE_ROWS : 3);
+      const rowsToShow = Math.max(visibleRowsCount, highestFilled > 3 ? Math.max(MAX_TABLE_ROWS, highestFilled) : 3);
       if (rowsToShow !== visibleRowsCount) {
         visibleRowsCount = rowsToShow;
         const btn = document.getElementById('btnToggleTableRows');
         if (btn) {
-          btn.innerText = (visibleRowsCount === MAX_TABLE_ROWS)
+          btn.innerText = (visibleRowsCount >= MAX_TABLE_ROWS)
             ? '🔼 Thu gọn bảng (3 hàng)'
-            : '🔽 Mở rộng bảng (20 hàng)';
+            : `🔽 Mở rộng bảng (${MAX_TABLE_ROWS} hàng)`;
         }
       }
 
@@ -763,13 +952,23 @@
 
         html += `
           <tr class="${rowBg} transition">
-            <td class="py-1.5 px-2.5 text-center font-mono font-bold text-slate-500">${i + 1}</td>
+            <td class="py-1.5 px-2 text-center">
+              <input
+                id="tableRowFolderNum_${i}"
+                type="text"
+                value="${escapeHtml(r.folder_number || '')}"
+                placeholder="#${i + 1}"
+                oninput="onRowFolderNumInput(${i}, this.value)"
+                title="Số thứ tự Folder Drive (VD: 152 ➔ Xuất file: 152.Tên Nhân Vật.mp4)"
+                class="w-16 px-1.5 py-1.5 rounded-lg bg-amber-50/70 border border-amber-300 text-amber-950 font-mono font-bold text-xs text-center focus:outline-none focus:border-blue-500 focus:bg-white"
+              />
+            </td>
             <td class="py-1.5 px-2.5">
               <input
                 id="tableRowName_${i}"
                 type="text"
                 value="${escapeHtml(r.name)}"
-                placeholder="VD: Michael Jackson, Prince..."
+                placeholder="VD: 152. Patrick Stewart..."
                 oninput="onRowNameInput(${i}, this.value)"
                 onpaste="onRowPaste(event, ${i})"
                 onkeydown="if(event.key==='Enter'){event.preventDefault(); scanSingleTableRow(${i});}"
@@ -810,6 +1009,7 @@
     function saveUiState() {
       try {
         const cleanRows = tableRowsData.map(r => ({
+          folder_number: r.folder_number || "",
           name: r.name || "",
           wiki_title: r.wiki_title || null,
           years_str: r.years_str || "",
@@ -817,6 +1017,7 @@
           project_id: r.project_id || null,
           is_scanning: false
         }));
+        const maxParEl = document.getElementById('maxParallelCelebsSelect');
         const stateObj = {
           has_state: true,
           visibleRowsCount,
@@ -824,6 +1025,10 @@
           currentProjectId,
           currentBatchId,
           currentBatch,
+          maxParallelCelebs: maxParEl ? parseInt(maxParEl.value, 10) || 3 : 3,
+          lastSheetUrl: (document.getElementById('sheetUrlInput')?.value || '').trim(),
+          lastSheetStartRow: parseInt(document.getElementById('sheetStartRowInput')?.value || '115', 10) || 115,
+          lastSheetEndRow: parseInt(document.getElementById('sheetEndRowInput')?.value || '130', 10) || 130,
           outputFolder: (document.getElementById('outputFolderInput')?.value || '').trim(),
           tableRowsData: cleanRows
         };
@@ -841,10 +1046,40 @@
       }
     }
 
+    function splitLeadingSttAndName(rawLine) {
+      const s = String(rawLine || '').trim();
+      const m = s.match(/^\s*#?(\d{1,5})\s*(?:[.\-–—:|)\]]+|\t+)\s*([A-Za-zÀ-ỹ].*)$/);
+      if (m) {
+        return { folder_number: m[1].trim(), name: m[2].trim() };
+      }
+      return { folder_number: null, name: s };
+    }
+
+    function onRowFolderNumInput(rowIdx, val) {
+      tableRowsData[rowIdx].folder_number = String(val || '').trim();
+      if (currentBatch && Array.isArray(currentBatch.items)) {
+        const bIt = currentBatch.items.find(it => it.row_index === rowIdx || (tableRowsData[rowIdx].project_id && it.project_id === tableRowsData[rowIdx].project_id));
+        if (bIt) bIt.folder_number = tableRowsData[rowIdx].folder_number;
+      }
+      renderBatchSwitcher(currentBatch);
+      saveUiState();
+    }
+
     function onRowNameInput(rowIdx, val) {
       const prevName = (tableRowsData[rowIdx].name || '').trim().toLowerCase();
-      tableRowsData[rowIdx].name = val;
-      const newName = (val || '').trim().toLowerCase();
+      // If user typed or pasted "152. Patrick Stewart" into the name box, auto-extract "152" into folder_number!
+      const parsed = splitLeadingSttAndName(val);
+      if (parsed.folder_number && !tableRowsData[rowIdx].folder_number) {
+        tableRowsData[rowIdx].folder_number = parsed.folder_number;
+        tableRowsData[rowIdx].name = parsed.name;
+        const fnInput = document.getElementById(`tableRowFolderNum_${rowIdx}`);
+        const nmInput = document.getElementById(`tableRowName_${rowIdx}`);
+        if (fnInput) fnInput.value = parsed.folder_number;
+        if (nmInput) nmInput.value = parsed.name;
+      } else {
+        tableRowsData[rowIdx].name = val;
+      }
+      const newName = (tableRowsData[rowIdx].name || '').trim().toLowerCase();
       if (prevName !== newName) {
         tableRowsData[rowIdx].wiki_title = null;
         tableRowsData[rowIdx].scanned_info = null;
@@ -865,20 +1100,43 @@
       saveUiState();
     }
 
+    function ensureTableCapacity(neededRows) {
+      if (neededRows > MAX_TABLE_ROWS) {
+        const extra = neededRows - MAX_TABLE_ROWS;
+        for (let i = 0; i < extra; i++) {
+          tableRowsData.push({
+            folder_number: "",
+            name: "",
+            wiki_title: null,
+            years_str: "",
+            scanned_info: null,
+            project_id: null,
+            is_scanning: false
+          });
+        }
+        MAX_TABLE_ROWS = neededRows;
+      }
+    }
+
     function onRowPaste(event, startRowIdx) {
       const clipText = (event.clipboardData || window.clipboardData).getData('text') || '';
       const lines = clipText.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
       if (lines.length <= 1) return; // Normal single-line paste
       event.preventDefault();
+      ensureTableCapacity(startRowIdx + lines.length);
       for (let k = 0; k < lines.length && (startRowIdx + k) < MAX_TABLE_ROWS; k++) {
         const idx = startRowIdx + k;
-        tableRowsData[idx].name = lines[k];
+        const sp = splitLeadingSttAndName(lines[k]);
+        if (sp.folder_number) {
+          tableRowsData[idx].folder_number = sp.folder_number;
+        }
+        tableRowsData[idx].name = sp.name;
         tableRowsData[idx].wiki_title = null;
         tableRowsData[idx].scanned_info = null;
         tableRowsData[idx].project_id = null;
       }
       if (startRowIdx + lines.length > 3) {
-        visibleRowsCount = MAX_TABLE_ROWS;
+        visibleRowsCount = Math.max(MAX_TABLE_ROWS, startRowIdx + lines.length);
       }
       renderCelebTable();
       syncScannedTabsFromTable();
@@ -889,6 +1147,7 @@
       const oldPid = tableRowsData[rowIdx]?.project_id || null;
       // Leave row #rowIdx completely empty in place so user can type a replacement celebrity right into row #rowIdx!
       tableRowsData[rowIdx] = {
+        folder_number: "",
         name: "",
         wiki_title: null,
         years_str: "",
@@ -942,6 +1201,7 @@
       const itemObj = {
         index: existingIdx >= 0 ? existingIdx : currentBatch.items.length,
         row_index: rowIdx,
+        folder_number: tableRowsData[rowIdx].folder_number || "",
         name: info.name || tableRowsData[rowIdx].name.trim(),
         display_name: info.name || tableRowsData[rowIdx].name.trim(),
         wiki_title: info.wiki_title || info.name,
@@ -978,6 +1238,7 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             name: rawName || exactWikiTitle,
+            folder_number: row.folder_number || null,
             exact_wiki_title: exactWikiTitle || null,
             row_index: rowIdx,
             create_project: true,
@@ -1037,6 +1298,7 @@
         const output_folder = document.getElementById('outputFolderInput').value.trim();
         const payloadItems = filled.map(({ rowIdx, row }) => ({
           row_index: rowIdx,
+          folder_number: row.folder_number || null,
           name: row.name.trim(),
           exact_wiki_title: row.wiki_title || null,
           existing_project_id: row.project_id || null,
@@ -1063,6 +1325,9 @@
           if (tableRowsData[rIdx]) {
             tableRowsData[rIdx].scanned_info = info;
             tableRowsData[rIdx].wiki_title = info.wiki_title || info.name;
+            if (info.folder_number && !tableRowsData[rIdx].folder_number) {
+              tableRowsData[rIdx].folder_number = String(info.folder_number);
+            }
             if (info.project_id) {
               tableRowsData[rIdx].project_id = info.project_id;
             }
@@ -1195,6 +1460,7 @@
       activeTableRowIdx = 0;
 
       tableRowsData = Array.from({ length: MAX_TABLE_ROWS }, () => ({
+        folder_number: "",
         name: "",
         wiki_title: null,
         years_str: "",
@@ -1244,6 +1510,160 @@
         }
       } catch (e) {
         console.error(e);
+      }
+    }
+
+    // --- Google Sheet / Excel File Import Modal Functions ---
+    function openSheetImportModal() {
+      document.getElementById('sheetImportModal').classList.remove('hidden');
+    }
+
+    function closeSheetImportModal() {
+      document.getElementById('sheetImportModal').classList.add('hidden');
+    }
+
+    function renderSheetPreviewItems(items, totalRows) {
+      sheetPreviewItems = Array.isArray(items) ? items : [];
+      const badgeEl = document.getElementById('sheetPreviewCountBadge');
+      const listEl = document.getElementById('sheetPreviewList');
+      const statusEl = document.getElementById('sheetPreviewStatus');
+      if (badgeEl) badgeEl.innerText = `${sheetPreviewItems.length} dòng`;
+      if (statusEl && totalRows) {
+        statusEl.innerText = `📋 Đã quét được ${sheetPreviewItems.length} nhân vật (Trên tổng số ${totalRows} dòng của Sheet):`;
+      }
+      if (!listEl) return;
+      if (!sheetPreviewItems.length) {
+        listEl.innerHTML = `<div class="text-rose-600 text-center py-12 font-sans font-semibold">Không tìm thấy dòng nhân vật nào trong khoảng dòng bạn chọn. Hãy kiểm tra lại Từ dòng ➔ Đến dòng!</div>`;
+        return;
+      }
+      listEl.innerHTML = sheetPreviewItems.map((it, idx) => `
+        <div class="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-white border border-slate-200">
+          <div class="flex items-center gap-2">
+            <span class="px-2 py-0.5 rounded bg-amber-100 text-amber-950 font-bold text-xs">📁 STT: ${escapeHtml(it.folder_number || String(it.sheet_row))}</span>
+            <span class="font-bold text-slate-900 font-sans text-xs">${escapeHtml(it.name)}</span>
+          </div>
+          <span class="text-[11px] text-slate-400">Dòng Sheet #${it.sheet_row} ➔ Tên file: <strong>${escapeHtml(it.folder_number || String(it.sheet_row))}.${escapeHtml(it.name)}.mp4</strong></span>
+        </div>
+      `).join('');
+    }
+
+    async function previewSheetFromUrl() {
+      const sheet_url = (document.getElementById('sheetUrlInput')?.value || '').trim();
+      const start_row = parseInt(document.getElementById('sheetStartRowInput')?.value || '1', 10) || 1;
+      const end_row = parseInt(document.getElementById('sheetEndRowInput')?.value || '30', 10) || start_row;
+      if (!sheet_url) {
+        alert('Vui lòng dán đường link Google Sheet (đã bật chia sẻ công khai) vào ô!');
+        return;
+      }
+      const btn = document.getElementById('btnFetchSheetUrl');
+      if (btn) {
+        btn.disabled = true;
+        btn.innerText = '⏳ Đang quét Sheet...';
+      }
+      try {
+        const res = await fetch('/api/sheet/parse-url', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sheet_url, start_row, end_row })
+        });
+        const data = await safeReadJson(res);
+        if (!res.ok) {
+          throw new Error(data.detail || 'Không thể đọc Google Sheet');
+        }
+        renderSheetPreviewItems(data.items || [], data.total_sheet_rows || 0);
+        saveUiState();
+      } catch (e) {
+        alert('Lỗi đọc Google Sheet: ' + e.message);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerText = '🔍 Quét dòng từ Link';
+        }
+      }
+    }
+
+    async function previewSheetFromFile() {
+      const fileInput = document.getElementById('sheetFileInput');
+      if (!fileInput || !fileInput.files || !fileInput.files.length) {
+        alert('Vui lòng chọn một file (.xlsx, .csv, .txt) từ máy tính!');
+        return;
+      }
+      const start_row = parseInt(document.getElementById('sheetStartRowInput')?.value || '1', 10) || 1;
+      const end_row = parseInt(document.getElementById('sheetEndRowInput')?.value || '30', 10) || start_row;
+      const fd = new FormData();
+      fd.append('file', fileInput.files[0]);
+      fd.append('start_row', String(start_row));
+      fd.append('end_row', String(end_row));
+      try {
+        const res = await fetch('/api/sheet/parse-file', {
+          method: 'POST',
+          body: fd
+        });
+        const data = await safeReadJson(res);
+        if (!res.ok) {
+          throw new Error(data.detail || 'Không thể đọc file Sheet');
+        }
+        renderSheetPreviewItems(data.items || [], data.total_sheet_rows || 0);
+      } catch (e) {
+        alert('Lỗi đọc file Sheet: ' + e.message);
+      }
+    }
+
+    async function applySheetRowsToTable(autoScanAfter = false) {
+      // If user hasn't clicked "Quét dòng" yet, automatically fetch first!
+      if (!sheetPreviewItems.length) {
+        const hasUrl = (document.getElementById('sheetUrlInput')?.value || '').trim();
+        const fileInput = document.getElementById('sheetFileInput');
+        if (hasUrl) {
+          await previewSheetFromUrl();
+        } else if (fileInput && fileInput.files && fileInput.files.length) {
+          await previewSheetFromFile();
+        }
+      }
+      if (!sheetPreviewItems.length) {
+        alert('Chưa có dòng dữ liệu nào để nạp! Hãy dán link Google Sheet hoặc chọn file rồi bấm Quét dòng.');
+        return;
+      }
+
+      const count = sheetPreviewItems.length;
+      ensureTableCapacity(Math.max(30, count));
+      tableRowsData = Array.from({ length: MAX_TABLE_ROWS }, (_, i) => {
+        if (i < count) {
+          return {
+            folder_number: String(sheetPreviewItems[i].folder_number || '').trim(),
+            name: String(sheetPreviewItems[i].name || '').trim(),
+            wiki_title: null,
+            years_str: "",
+            scanned_info: null,
+            project_id: null,
+            is_scanning: false
+          };
+        }
+        return {
+          folder_number: "",
+          name: "",
+          wiki_title: null,
+          years_str: "",
+          scanned_info: null,
+          project_id: null,
+          is_scanning: false
+        };
+      });
+
+      visibleRowsCount = count > 3 ? Math.max(MAX_TABLE_ROWS, count) : 3;
+      activeTableRowIdx = 0;
+      currentProjectId = null;
+      currentProject = null;
+      currentBatchId = null;
+      currentBatch = null;
+
+      closeSheetImportModal();
+      renderCelebTable();
+      syncScannedTabsFromTable();
+      saveUiState();
+
+      if (autoScanAfter) {
+        await scanAllTableRows();
       }
     }
 
@@ -1484,12 +1904,16 @@
 
       const batchItemsPayload = filled.map(({ rowIdx, row }) => ({
         row_index: rowIdx,
+        folder_number: row.folder_number || null,
         name: (row.scanned_info && row.scanned_info.name) ? row.scanned_info.name : row.name.trim(),
         wiki_title: row.wiki_title || (row.scanned_info && row.scanned_info.wiki_title) || null,
         exact_wiki_title: row.wiki_title || (row.scanned_info && row.scanned_info.wiki_title) || null,
         years: parseYearsFromStr(row.years_str),
         project_id: row.project_id || null
       }));
+
+      const maxParEl = document.getElementById('maxParallelCelebsSelect');
+      const max_parallel_celebs = maxParEl ? (parseInt(maxParEl.value, 10) || 3) : 3;
 
       setRunningButtonsState(true, `${batchItemsPayload.length} người`);
       try {
@@ -1511,7 +1935,8 @@
             news_duration: 11.5,
             year_clip_duration: 4.2,
             auto_render: Boolean(autoRender),
-            resume_unfinished: Boolean(resumeUnfinished)
+            resume_unfinished: Boolean(resumeUnfinished),
+            max_parallel_celebs
           })
         });
         const data = await safeReadJson(res);
@@ -1590,8 +2015,7 @@
       const bar = document.getElementById('batchSwitcherBar');
       const summaryEl = document.getElementById('batchSummaryText');
       const tabsEl = document.getElementById('batchTabsContainer');
-      const btnAll = document.getElementById('btnRenderAllBatch');
-      const btnCur = document.getElementById('btnRenderCurrentTabQuick');
+      const btnAllTop = document.getElementById('btnRenderAllTop');
 
       const filled = getFilledTableRows();
       if (!filled.length) {
@@ -1606,9 +2030,11 @@
           it => (row.project_id && it.project_id === row.project_id) || it.row_index === rowIdx
         );
         const info = row.scanned_info;
-        const labelName = (matchItem && (matchItem.display_name || matchItem.name))
+        const folder_number = String(row.folder_number || (matchItem && matchItem.folder_number) || '').trim();
+        const rawName = (matchItem && (matchItem.display_name || matchItem.name))
           || (info && info.name)
           || row.name.trim();
+        const labelName = folder_number ? `${folder_number}.${rawName}` : rawName;
         const status = matchItem ? matchItem.status : (info ? 'scanned' : 'unscanned');
         const progress_pct = matchItem ? (matchItem.progress_pct || 0) : 0;
         const total_duration = matchItem ? (matchItem.total_duration || 0) : 0;
@@ -1622,6 +2048,8 @@
           rowIdx,
           row,
           info,
+          folder_number,
+          rawName,
           labelName,
           status,
           progress_pct,
@@ -1649,34 +2077,15 @@
       } else if (exportedCount === totalCnt && totalCnt > 0) {
         summaryEl.innerText = `🎉 Đã xuất MP4 hoàn tất cho cả ${exportedCount}/${totalCnt} nhân vật!`;
       } else if (readyOrExportedCount > 0) {
-        summaryEl.innerText = `✔ Đã cắt xong ${readyOrExportedCount}/${totalCnt} nhân vật! Hãy kiểm nghiệm các cảnh bên dưới rồi bấm "💾 Xuất Video" hoặc "💾 Xuất Tất Cả MP4"`;
+        summaryEl.innerText = `✔ Đã cắt xong ${readyOrExportedCount}/${totalCnt} nhân vật! Hãy kiểm nghiệm các cảnh bên dưới rồi bấm "💾 3. Xuất Video Tab này" hoặc "📦 Xuất Tất Cả MP4" trên thanh công cụ`;
       } else {
         summaryEl.innerText = `Đã duyệt ${scannedCnt}/${totalCnt} nhân vật — Kiểm tra kết quả quét trên bảng rồi bấm "🚀 2. Tạo Video (Tìm & Cắt)"`;
       }
 
-      if (btnAll) {
-        if (readyOrExportedCount >= 1) {
-          btnAll.classList.remove('hidden');
-          btnAll.innerText = totalCnt > 1 ? `💾 Xuất Tất Cả MP4 (${readyOrExportedCount} người)` : `💾 Xuất Video MP4`;
-        } else {
-          btnAll.classList.add('hidden');
-        }
-      }
-
-      const activeModel = rowTabModels.find(m => m.rowIdx === activeTableRowIdx || (m.project_id && m.project_id === currentProjectId));
-      if (btnCur) {
-        if (activeModel && (activeModel.status === 'ready_for_preview' || activeModel.status === 'completed')) {
-          btnCur.classList.remove('hidden');
-          if (activeModel.needs_rerender) {
-            btnCur.className = 'px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-extrabold shadow-xs cursor-pointer transition animate-pulse';
-            btnCur.innerText = `⚠️ Xuất đè lại MP4 (${activeModel.labelName})`;
-          } else {
-            btnCur.className = 'px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs cursor-pointer transition';
-            btnCur.innerText = `💾 Xuất Video (${activeModel.labelName})`;
-          }
-        } else {
-          btnCur.classList.add('hidden');
-        }
+      if (btnAllTop) {
+        btnAllTop.innerText = readyOrExportedCount > 0
+          ? `📦 Xuất Tất Cả MP4 (${readyOrExportedCount}/${totalCnt})`
+          : `📦 Xuất Tất Cả MP4`;
       }
 
       tabsEl.innerHTML = rowTabModels.map(m => {
@@ -1773,26 +2182,53 @@
     }
 
     async function renderAllBatchVideos() {
-      if (!currentBatchId) {
+      const output_folder = document.getElementById('outputFolderInput').value.trim();
+      if (!output_folder) {
+        alert('Vui lòng chọn hoặc nhập Thư mục lưu video đầu ra!');
+        return;
+      }
+
+      const filled = getFilledTableRows();
+      const bItems = (currentBatch && Array.isArray(currentBatch.items)) ? currentBatch.items : [];
+      const itemsToRender = [];
+      filled.forEach(({ rowIdx, row }) => {
+        const matchB = bItems.find(it => (row.project_id && it.project_id === row.project_id) || it.row_index === rowIdx);
+        const pid = row.project_id || (matchB && matchB.project_id) || null;
+        if (pid) {
+          itemsToRender.push({
+            project_id: pid,
+            folder_number: String(row.folder_number || (matchB && matchB.folder_number) || '').trim() || null,
+            name: (row.scanned_info && row.scanned_info.name) || row.name.trim()
+          });
+        }
+      });
+
+      if (!itemsToRender.length && currentProjectId) {
         await renderFinalVideo();
         return;
       }
-      const output_folder = document.getElementById('outputFolderInput').value.trim();
-      const btnAll = document.getElementById('btnRenderAllBatch');
+      if (!itemsToRender.length) {
+        alert('Chưa có Tab nhân vật nào đã cắt video xong để xuất! Hãy bấm "🚀 2. Tạo Video (Tìm & Cắt)" hoặc "⚡ Chạy Tự Động A-Z" trước.');
+        return;
+      }
+
+      const btnAll = document.getElementById('btnRenderAllTop');
       if (btnAll) {
         btnAll.disabled = true;
         btnAll.innerText = '⏳ Đang xuất tất cả MP4...';
       }
       try {
-        const res = await fetch(`/api/batch/${currentBatchId}/render-all`, {
+        const res = await fetch('/api/projects/render-many', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            items: itemsToRender,
             output_folder,
+            batch_id: currentBatchId || null,
             layout: 'center_band'
           })
         });
-        const data = await res.json();
+        const data = await safeReadJson(res);
         if (!res.ok) {
           throw new Error(data.detail || 'Lỗi khi xuất hàng loạt MP4');
         }
@@ -1807,8 +2243,10 @@
           document.getElementById('exportedFilePath').innerText =
             `Đã xuất ${renderedList.length} video MP4 vào thư mục: ${output_folder}`;
           document.getElementById('exportedFileMeta').innerText =
-            renderedList.map(r => `${r.name} (${r.total_duration}s)`).join(' • ');
+            renderedList.map(r => `${r.output_path.split(/[\\/]/).pop()} (${r.total_duration}s)`).join(' • ');
           document.getElementById('exportedBanner').classList.remove('hidden');
+        } else if (data.errors && data.errors.length) {
+          alert('Một số nhân vật chưa đủ cảnh để xuất:\n' + data.errors.join('\n'));
         }
         saveUiState();
       } catch (e) {
@@ -1817,7 +2255,7 @@
         if (btnAll) {
           btnAll.disabled = false;
         }
-        if (currentBatch) renderBatchSwitcher(currentBatch);
+        renderBatchSwitcher(currentBatch);
       }
     }
 
@@ -1880,10 +2318,10 @@
       if (btnRenderFinal && btnRenderLabel) {
         if (needsRerender) {
           btnRenderFinal.className = 'px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-extrabold shadow-md transition cursor-pointer animate-pulse';
-          btnRenderLabel.innerText = '⚠️ Đã sửa cảnh — Bấm Xuất đè MP4';
+          btnRenderLabel.innerText = '⚠️ Xuất đè lại MP4';
         } else {
           btnRenderFinal.className = 'px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold shadow-sm transition cursor-pointer';
-          btnRenderLabel.innerText = hasExportedFile ? '💾 3. Xuất đè lại MP4' : '💾 3. Xuất Video';
+          btnRenderLabel.innerText = hasExportedFile ? '💾 3. Xuất đè lại MP4' : '💾 3. Xuất Video Tab này';
         }
       }
 
@@ -2523,8 +2961,16 @@
     }
 
     async function renderFinalVideo() {
+      // Auto-resolve project_id from activeTableRowIdx or currentBatch if currentProjectId is out of sync
+      if (!currentProjectId && tableRowsData[activeTableRowIdx] && tableRowsData[activeTableRowIdx].project_id) {
+        currentProjectId = tableRowsData[activeTableRowIdx].project_id;
+      }
+      if (!currentProjectId && currentBatch && Array.isArray(currentBatch.items) && currentBatch.items.length) {
+        const matchB = currentBatch.items.find(it => it.row_index === activeTableRowIdx) || currentBatch.items[0];
+        if (matchB && matchB.project_id) currentProjectId = matchB.project_id;
+      }
       if (!currentProjectId) {
-        alert('Vui lòng bấm "🚀 2. Tạo Video (Tìm & Cắt)" trước khi xuất MP4!');
+        alert('Vui lòng bấm "🚀 2. Tạo Video (Tìm & Cắt)" hoặc "⚡ Chạy Tự Động A-Z" trước khi xuất MP4!');
         return;
       }
       const output_folder = document.getElementById('outputFolderInput').value.trim();
@@ -2533,11 +2979,20 @@
         return;
       }
 
+      const activeRow = tableRowsData[activeTableRowIdx] || tableRowsData.find(r => r.project_id === currentProjectId) || {};
+      const folder_number = String(activeRow.folder_number || '').trim() || null;
+
+      // Pause preview player before overwriting file on Windows so Media Player doesn't hold a read handle
+      const previewPlayer = document.getElementById('finalVideoPlayer');
+      if (previewPlayer) {
+        try { previewPlayer.pause(); } catch (_) {}
+      }
+
       const btn = document.getElementById('btnRenderFinal');
       const labelEl = document.getElementById('btnRenderLabel');
-      const quickBtn = document.getElementById('btnRenderCurrentTabQuick');
-      btn.disabled = true;
-      if (quickBtn) quickBtn.disabled = true;
+      const bannerBtn = document.getElementById('btnBannerRerenderNow');
+      if (btn) btn.disabled = true;
+      if (bannerBtn) bannerBtn.disabled = true;
       if (labelEl) labelEl.innerText = '⏳ Đang xuất MP4...';
 
       try {
@@ -2546,6 +3001,7 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             output_folder,
+            folder_number,
             layout: 'center_band'
           })
         });
@@ -2558,6 +3014,7 @@
           const bItem = currentBatch.items.find(it => it.project_id === currentProjectId);
           if (bItem && fv) {
             bItem.status = 'completed';
+            bItem.needs_rerender = false;
             bItem.output_path = fv.output_path;
             bItem.total_duration = fv.total_duration;
           }
@@ -2577,12 +3034,13 @@
             }
           }
         }
+        saveUiState();
       } catch (e) {
         alert('Lỗi xuất MP4: ' + e.message);
       } finally {
-        btn.disabled = false;
-        if (quickBtn) quickBtn.disabled = false;
-        if (labelEl) labelEl.innerText = '💾 3. Xuất Video';
+        if (btn) btn.disabled = false;
+        if (bannerBtn) bannerBtn.disabled = false;
+        if (currentProject) renderStoryboard(currentProject);
       }
     }
 
@@ -2969,12 +3427,29 @@
 
       const saved = await loadSavedUiState();
       if (saved && saved.has_state && Array.isArray(saved.tableRowsData)) {
-        visibleRowsCount = saved.visibleRowsCount === MAX_TABLE_ROWS ? MAX_TABLE_ROWS : 3;
+        ensureTableCapacity(Math.max(30, saved.tableRowsData.length));
+        visibleRowsCount = saved.visibleRowsCount > 3 ? Math.max(MAX_TABLE_ROWS, saved.visibleRowsCount) : 3;
         const btnToggle = document.getElementById('btnToggleTableRows');
         if (btnToggle) {
-          btnToggle.innerText = (visibleRowsCount === MAX_TABLE_ROWS)
+          btnToggle.innerText = (visibleRowsCount > 3)
             ? '🔼 Thu gọn bảng (3 hàng)'
-            : '🔽 Mở rộng bảng (20 hàng)';
+            : `🔽 Mở rộng bảng (${MAX_TABLE_ROWS} hàng)`;
+        }
+        if (saved.maxParallelCelebs) {
+          const maxParEl = document.getElementById('maxParallelCelebsSelect');
+          if (maxParEl) maxParEl.value = String(saved.maxParallelCelebs);
+        }
+        if (saved.lastSheetUrl) {
+          const sUrlEl = document.getElementById('sheetUrlInput');
+          if (sUrlEl) sUrlEl.value = saved.lastSheetUrl;
+        }
+        if (saved.lastSheetStartRow) {
+          const sStEl = document.getElementById('sheetStartRowInput');
+          if (sStEl) sStEl.value = String(saved.lastSheetStartRow);
+        }
+        if (saved.lastSheetEndRow) {
+          const sEndEl = document.getElementById('sheetEndRowInput');
+          if (sEndEl) sEndEl.value = String(saved.lastSheetEndRow);
         }
         activeTableRowIdx = (typeof saved.activeTableRowIdx === 'number') ? saved.activeTableRowIdx : 0;
         currentProjectId = saved.currentProjectId || null;
@@ -2995,6 +3470,7 @@
         tableRowsData = Array.from({ length: MAX_TABLE_ROWS }, (_, i) => {
           const sr = saved.tableRowsData[i] || {};
           return {
+            folder_number: sr.folder_number || "",
             name: sr.name || "",
             wiki_title: sr.wiki_title || null,
             years_str: sr.years_str || "",

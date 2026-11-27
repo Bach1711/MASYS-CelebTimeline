@@ -1,9 +1,9 @@
 {
-  "version": "ver 0.9",
-  "sha": "ec020f843d4854d600cf45b18c9072d85a0667b7",
-  "short_sha": "ec020f8",
-  "message": "feat(CON-228): post-export MP4 review modal with scene jump, needs_rerender orange alert & single-tab rerun/update years (ver 0.9)",
-  "date": "2026-11-27 15:57:00 +0700",
+  "version": "ver 1.0",
+  "sha": "5547928ef48993ef2bc61e04b93300ea56bc3e87",
+  "short_sha": "5547928",
+  "message": "feat(CON-229): Google Sheet/Excel row range import (115-130), folder STT filename prefix (152.Name.mp4), 2-button export bar, 3-5 thread selector, Windows timestamp overwrite & boxed tab bar (ver 1.0)",
+  "date": "2026-11-27 16:40:00 +0700",
   "author": "BachVu",
   "repo": "Bach1711/MASYS-CelebTimeline",
   "branch": "main"

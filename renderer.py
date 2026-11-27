@@ -1,5 +1,7 @@
 import os
 import re
+import time
+import ctypes
 import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -489,13 +491,16 @@ def render_final_timeline_video(
         else:
             total_years_dur += real_dur
 
-    # 3. Concatenate all normalized segments directly into output_path (no BGM mixing)
+    # 3. Concatenate all normalized segments into a temporary MP4 file first,
+    #    then delete the old file and atomically replace it + reset Windows CreationTime & LastWriteTime
+    #    so Windows File Explorer always displays the brand-new export timestamp!
     concat_list_path = os.path.join(render_dir, "concat_list.txt")
     with open(concat_list_path, "w", encoding="utf-8") as f:
         for p in normalized_files:
             safe_p = p.replace("\\", "/")
             f.write(f"file '{safe_p}'\n")
 
+    tmp_render_mp4 = os.path.join(render_dir, f"final_out_{int(time.time() * 1000)}.mp4")
     cmd_concat = [
         FFMPEG_BIN,
         "-y",
@@ -517,18 +522,75 @@ def render_final_timeline_video(
         "2",
         "-movflags",
         "+faststart",
-        output_path,
+        tmp_render_mp4,
     ]
     res_c = subprocess.run(cmd_concat, capture_output=True, text=True, timeout=90)
-    if res_c.returncode != 0 or not os.path.exists(output_path):
+    if res_c.returncode != 0 or not os.path.exists(tmp_render_mp4):
         raise RuntimeError(f"Lỗi khi ghép các đoạn video: {res_c.stderr[-300:]}")
 
-    total_duration = get_video_duration(output_path) or (actual_news_dur + total_years_dur)
+    final_output_path = output_path
+    try:
+        if os.path.exists(final_output_path):
+            os.remove(final_output_path)
+        shutil.move(tmp_render_mp4, final_output_path)
+    except Exception:
+        try:
+            shutil.copyfile(tmp_render_mp4, final_output_path)
+            os.remove(tmp_render_mp4)
+        except Exception:
+            # If the existing file is locked by an external media player, save as a fresh timestamped copy instead of failing
+            base_no_ext, ext_s = os.path.splitext(output_path)
+            final_output_path = f"{base_no_ext}_{int(time.time()) % 10000}{ext_s}"
+            shutil.move(tmp_render_mp4, final_output_path)
+
+    _refresh_windows_file_timestamps(final_output_path)
+
+    total_duration = get_video_duration(final_output_path) or (actual_news_dur + total_years_dur)
 
     return {
-        "output_path": output_path,
+        "output_path": final_output_path,
         "total_duration": round(total_duration, 2),
         "news_duration": round(actual_news_dur, 2),
         "years_duration": round(total_years_dur, 2),
-        "file_size_mb": round(os.path.getsize(output_path) / (1024 * 1024), 2),
+        "file_size_mb": round(os.path.getsize(final_output_path) / (1024 * 1024), 2),
     }
+
+
+def _refresh_windows_file_timestamps(filepath: str):
+    """
+    Explicitly update both CreationTime ('Date created') and LastWriteTime ('Date modified')
+    on Windows (bypassing NTFS File System Tunneling) so File Explorer immediately reflects
+    the exact current time when a video is re-exported/overwritten.
+    """
+    now = time.time()
+    try:
+        os.utime(filepath, (now, now))
+    except Exception:
+        pass
+    if os.name != "nt":
+        return
+    try:
+        class FILETIME(ctypes.Structure):
+            _fields_ = [("dwLowDateTime", ctypes.c_uint32), ("dwHighDateTime", ctypes.c_uint32)]
+
+        # Convert Unix epoch seconds to Windows FILETIME (100-nanosecond intervals since Jan 1, 1601)
+        ft_val = int((now + 11644473600.0) * 10000000)
+        ft = FILETIME(ft_val & 0xFFFFFFFF, (ft_val >> 32) & 0xFFFFFFFF)
+        FILE_WRITE_ATTRIBUTES = 0x0100
+        OPEN_EXISTING = 3
+        FILE_SHARE_READ = 0x00000001
+        FILE_SHARE_WRITE = 0x00000002
+        handle = ctypes.windll.kernel32.CreateFileW(
+            ctypes.c_wchar_p(os.path.abspath(filepath)),
+            FILE_WRITE_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            None,
+            OPEN_EXISTING,
+            0,
+            None,
+        )
+        if handle and handle != -1 and handle != 0xFFFFFFFFFFFFFFFF:
+            ctypes.windll.kernel32.SetFileTime(handle, ctypes.byref(ft), ctypes.byref(ft), ctypes.byref(ft))
+            ctypes.windll.kernel32.CloseHandle(handle)
+    except Exception:
+        pass

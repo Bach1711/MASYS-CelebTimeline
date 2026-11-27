@@ -60,7 +60,7 @@
           <span id="statTodo" class="px-3 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-300">Todo: 0</span>
           <span id="statInProgress" class="px-3 py-1 rounded-full bg-blue-100 text-blue-800 border border-blue-200">In Progress: 0</span>
           <span id="statReview" class="px-3 py-1 rounded-full bg-amber-100 text-amber-800 border border-amber-200">Review: 0</span>
-          <span id="statDone" class="px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">Done: 20</span>
+          <span id="statDone" class="px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">Done: 21</span>
         </div>
       </div>
 
@@ -68,7 +68,7 @@
         <div id="overallProgressBar" class="bg-emerald-500 h-full transition-all duration-300" style="width: 100%"></div>
       </div>
       <div class="flex justify-between text-xs text-slate-600 font-semibold">
-        <span id="overallProgressLabel">Hoàn thành: 100% (20/20 Tickets)</span>
+        <span id="overallProgressLabel">Hoàn thành: 100% (21/21 Tickets)</span>
         <span>Chuẩn nghiệm thu: Khung dọc 9:16 (1080×1920) • Giữ tiếng bản tin đầu • Tắt tiếng các năm</span>
       </div>
     </div>
@@ -382,6 +382,21 @@
           "Nút 🎬 Xem MP4 ngay trên từng Tab nhân vật đã xuất và trên thanh điều khiển mở cửa sổ phát MP4 9:16 kèm danh sách mốc năm để tua nhanh hoặc bấm '✨ Sửa năm X' nhảy thẳng xuống ô cảnh đó trên bảng lưới.",
           "Khi đã xuất MP4 mà người dùng bấm Đổi cảnh / Đổi video / Chỉnh giây / Thêm-Xóa cảnh / Đổi bản tin, hệ thống tự động bật trạng thái màu cam '⚠️ Đã sửa cảnh — Bấm Xuất đè MP4' trên cả thanh công cụ, Tab nhân vật và Banner thông báo.",
           "Nút '🔄 Cập nhật năm' (giữ nguyên các năm cũ, chỉ tìm năm mới sửa) và '🔄 Tìm mới lại nhân vật này' (chạy lại riêng 1 Tab nhân vật) hoạt động độc lập không ảnh hưởng các Tab khác."
+        ]
+      },
+      {
+        id: "CON-229",
+        url: "https://linear.app/conducdaudan/issue/CON-229/sheet-import-folder-prefix-and-ui-polish-nap-google-sheet-theo-dong",
+        title: "[Sheet Import, Folder Prefix & UI Polish] Nạp Google Sheet theo dòng (115-130), Đặt tên kèm STT (152.Tên), Tối giản 2 Nút Xuất, Chọn số luồng & Sửa tràn khung Tab",
+        priority: "Urgent",
+        status: "Done",
+        module: "renderer.py, app.py, static/index.html",
+        description: "Triển khai 6 nâng cấp lớn: (1) Ghi đè MP4 qua file tạm + SetFileTime làm mới hoàn toàn Date Created/Modified trên Windows Explorer; (2) Hộp chọn chế độ Đa luồng (3/4/5 video song song); (3) Cột Mã số/STT Folder Drive trong bảng nhân vật để xuất file dạng '152.Patrick Stewart.mp4'; (4) Tối giản còn đúng 2 nút Xuất trên thanh công cụ (Xuất Video Tab này / Xuất đè lại MP4 + Xuất Tất Cả MP4) đảm bảo 100% bấm là xuất được; (5) Đóng hộp 2 tầng gọn gàng cho thanh 'Đang xem Tab' không bao giờ tràn khung; (6) Nút & Modal '📊 Nạp File Sheet' cho phép dán link Google Sheets hoặc import file Excel/CSV và trích xuất tự động STT + Tên nhân vật theo khoảng dòng (VD: 115 đến 130).",
+        dod: [
+          "Ghi đè file MP4 cập nhật mới hoàn toàn cả Date Created lẫn Date Modified trên Windows Explorer (SetFileTime).",
+          "Nút '📊 Nạp File Sheet' quét được cả link Google Sheets (bật chia sẻ) lẫn file .xlsx/.csv/.txt theo khoảng dòng (VD: 115 đến 130), lấy đúng STT và Tên nhân vật đổ vào bảng.",
+          "Cột '📁 STT / Mã số' trong bảng nhân vật (kèm nút 🔢 Tự đánh STT tăng dần) tự động đặt tên file MP4 xuất ra theo chuẩn '<STT>.<Tên Nhân Vật>.mp4' (VD: 152.Patrick Stewart.mp4).",
+          "Tối giản hệ thống nút xuất còn đúng 2 nút trên thanh công cụ ('💾 3. Xuất Video Tab này' / '⚠️ Xuất đè lại MP4' và '📦 Xuất Tất Cả MP4'), đảm bảo 100% xuất được; đóng hộp gọn thanh 'Đang xem Tab' không tràn khung."
         ]
       }
     ];
