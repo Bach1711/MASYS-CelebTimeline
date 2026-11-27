@@ -1,9 +1,9 @@
 {
-  "version": "ver 0.6",
-  "sha": "d8854a5220ef2901bc06512bc318640a408bd940",
-  "short_sha": "d8854a5",
-  "message": "feat(CON-226): anti-hang timeout with auto replacement year & watchdog pause, clean startup pause/resume & 1-click Full-Auto A-Z trigger (ver 0.6)",
-  "date": "2026-11-27 11:13:28 +0700",
+  "version": "ver 0.7",
+  "sha": "e3809ac78efb1ee1a12124f6da742f06980b7a15",
+  "short_sha": "e3809ac",
+  "message": "fix(resume): handle final_video=None when clicking Tiếp tục Chạy (ver 0.7)",
+  "date": "2026-11-27 11:18:31 +0700",
   "author": "BachVu",
   "repo": "Bach1711/MASYS-CelebTimeline",
   "branch": "main"

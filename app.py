@@ -878,16 +878,17 @@ def api_start_batch(req: StartBatchRequest):
     already_cut_flags = []
     for entry in entry_list:
         p_loaded = _ensure_project_loaded(entry.project_id)
-        ycs = (p_loaded or {}).get("year_clips", [])
-        has_pending_or_err = any(yc.get("status") in ("pending", "processing", "error") for yc in ycs)
-        has_exported_mp4 = bool((p_loaded or {}).get("final_video", {}).get("output_path") and os.path.exists((p_loaded or {}).get("final_video", {}).get("output_path", "")))
+        ycs = (p_loaded or {}).get("year_clips") or []
+        has_pending_or_err = any(isinstance(yc, dict) and yc.get("status") in ("pending", "processing", "error") for yc in ycs)
+        fv_loaded = (p_loaded or {}).get("final_video") or {}
+        has_exported_mp4 = bool(fv_loaded.get("output_path") and os.path.exists(str(fv_loaded.get("output_path") or "")))
         if req.auto_render:
             is_done = bool(p_loaded and p_loaded.get("status") == "completed" and has_exported_mp4 and not has_pending_or_err)
         else:
             is_done = bool(
                 p_loaded
                 and p_loaded.get("status") in ("ready_for_preview", "completed")
-                and any(yc.get("status") == "ready" for yc in ycs)
+                and any(isinstance(yc, dict) and yc.get("status") == "ready" for yc in ycs)
                 and not has_pending_or_err
             )
         already_cut_flags.append(is_done)
@@ -911,7 +912,7 @@ def api_start_batch(req: StartBatchRequest):
         if p_existing and preserve_already_cut and already_cut_flags[idx]:
             with PROJECTS_LOCK:
                 p_obj = PROJECTS[pid]
-                disp_name = p_obj.get("celeb_info", {}).get("name") or entry.name.strip()
+                disp_name = (p_obj.get("celeb_info") or {}).get("name") or entry.name.strip()
                 fv = p_obj.get("final_video") or {}
                 item_status = "completed" if fv.get("output_path") else "ready_for_preview"
                 if idx == 0:
@@ -980,7 +981,7 @@ def api_start_batch(req: StartBatchRequest):
         pids_to_mark_active.append(pid)
         with PROJECTS_LOCK:
             p_obj = PROJECTS[pid]
-            disp_name = p_obj.get("celeb_info", {}).get("name") or entry.name.strip()
+            disp_name = (p_obj.get("celeb_info") or {}).get("name") or entry.name.strip()
             cur_pct = int(p_obj.get("progress_pct") or (5 if start_immediately else 0))
             if idx == 0:
                 first_proj = _serialize_project(p_obj)
@@ -1070,8 +1071,9 @@ def _sync_batch_items(batch_id: str) -> Optional[Dict[str, Any]]:
                     item["display_name"] = p["celeb_info"]["name"]
 
                 # Compute total cut duration for preview
-                nc_dur = float(p.get("news_clip", {}).get("duration_sec") or 0.0) if p.get("news_clip", {}).get("status") != "cleared" else 0.0
-                yc_dur = sum(float(yc.get("duration_sec") or 0.0) for yc in p.get("year_clips", []) if yc.get("status") == "ready")
+                nc_obj = p.get("news_clip") or {}
+                nc_dur = float(nc_obj.get("duration_sec") or 0.0) if nc_obj.get("status") != "cleared" else 0.0
+                yc_dur = sum(float(yc.get("duration_sec") or 0.0) for yc in (p.get("year_clips") or []) if isinstance(yc, dict) and yc.get("status") == "ready")
                 cut_dur = round(nc_dur + yc_dur, 1)
 
                 if p.get("final_video") and p["final_video"].get("output_path"):
@@ -1707,8 +1709,8 @@ def _run_full_pipeline_worker_impl(project_id: str, auto_render: bool = False):
                 if isinstance(yc, dict) and yc.get("status") == "processing":
                     yc["status"] = "pending"
                     yc["title"] = f"Tạm dừng tại năm {yc.get('year')} (Bấm Tiếp tục chạy để thử năm khác)"
-            ready_cnt = (1 if PROJECTS[project_id].get("news_clip", {}).get("status") == "ready" else 0) + len(
-                [yc for yc in PROJECTS[project_id].get("year_clips", []) if yc.get("status") == "ready"]
+            ready_cnt = (1 if (PROJECTS[project_id].get("news_clip") or {}).get("status") == "ready" else 0) + len(
+                [yc for yc in (PROJECTS[project_id].get("year_clips") or []) if isinstance(yc, dict) and yc.get("status") == "ready"]
             )
             PROJECTS[project_id]["status"] = "paused"
             PROJECTS[project_id]["error"] = "Tự động tạm dừng do quá thời gian chờ mạng/YouTube tại cảnh cuối."
@@ -1905,8 +1907,8 @@ def _run_full_pipeline_worker_impl(project_id: str, auto_render: bool = False):
             PROJECTS[project_id]["year_clips"] = ready_only
             PROJECTS[project_id]["years"] = [int(x["year"]) for x in ready_only]
 
-        ready_cnt = (1 if PROJECTS[project_id].get("news_clip", {}).get("status") == "ready" else 0) + len(
-            [yc for yc in PROJECTS[project_id].get("year_clips", []) if yc.get("status") == "ready"]
+        ready_cnt = (1 if (PROJECTS[project_id].get("news_clip") or {}).get("status") == "ready" else 0) + len(
+            [yc for yc in (PROJECTS[project_id].get("year_clips") or []) if isinstance(yc, dict) and yc.get("status") == "ready"]
         )
         if is_pipeline_cancelled():
             PROJECTS[project_id]["status"] = "stopped"
@@ -2024,7 +2026,7 @@ def _build_project_ref_embeddings(proj: Dict[str, Any], exclude_slot_idx: Option
     AND verified high-confidence thumbnails (`sim >= 0.34`, `match_ratio >= 0.85`) from
     other year clips of the same celebrity (covering young, mid-career, and recent ages).
     """
-    ref_paths = list(proj.get("celeb_info", {}).get("reference_images", []) or [])
+    ref_paths = list((proj.get("celeb_info") or {}).get("reference_images") or [])
     verified_thumbs = []
     with PROJECTS_LOCK:
         yc_snapshot = list(proj.get("year_clips") or [])
