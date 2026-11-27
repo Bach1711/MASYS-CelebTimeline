@@ -191,7 +191,7 @@
 
       <!-- Active Tab Celebrity Summary Bar -->
       <div class="pt-2 border-t border-slate-100 flex items-center justify-between gap-3 flex-wrap text-xs">
-        <div class="flex items-center gap-2.5">
+        <div class="flex items-center gap-2.5 flex-wrap">
           <img
             id="celebPortraitThumb"
             src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='36' height='36'><rect width='100%' height='100%' fill='%23e2e8f0'/></svg>"
@@ -203,8 +203,26 @@
             <span class="font-bold text-slate-900 ml-1" id="celebMetaName">Catherine O'Hara</span>
             <span class="text-slate-500 ml-1" id="celebMetaSpan">(Tự động lấy mốc năm & thời lượng linh hoạt ~1 phút)</span>
           </div>
+          <button
+            id="btnWatchExportedQuick"
+            type="button"
+            onclick="openExportedVideoForProject(currentProjectId)"
+            class="hidden px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold shadow-xs transition cursor-pointer"
+            title="Xem ngay bản Video MP4 đã xuất của nhân vật này để kiểm tra chất lượng từng cảnh"
+          >
+            🎬 Xem Video Đã Xuất
+          </button>
+          <button
+            id="btnRerunCurrentCeleb"
+            type="button"
+            onclick="rerunCurrentCelebrity(false)"
+            class="hidden px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 text-[11px] font-bold transition cursor-pointer"
+            title="Tìm & cắt mới lại toàn bộ cảnh cho riêng nhân vật đang mở (không ảnh hưởng các Tab khác)"
+          >
+            🔄 Tìm mới lại nhân vật này
+          </button>
         </div>
-        <div class="flex items-center gap-2 flex-1 max-w-xl">
+        <div class="flex items-center gap-1.5 flex-1 max-w-2xl">
           <label for="yearsListInput" class="text-slate-600 font-semibold shrink-0">📅 Mốc năm của Tab đang mở:</label>
           <input
             id="yearsListInput"
@@ -214,6 +232,15 @@
             oninput="if(tableRowsData[activeTableRowIdx]){tableRowsData[activeTableRowIdx].years_str=this.value; renderCelebTable(); saveUiState();}"
             class="flex-1 px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-300 text-slate-800 font-mono text-xs focus:outline-none focus:border-blue-500 focus:bg-white"
           />
+          <button
+            id="btnApplyUpdatedYears"
+            type="button"
+            onclick="applyUpdatedYearsForCurrentTab()"
+            class="px-2.5 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 text-[11px] font-bold shrink-0 transition cursor-pointer"
+            title="Giữ nguyên các năm đã có cảnh và chỉ tìm thêm các năm bạn vừa sửa/thêm vào ô bên cạnh"
+          >
+            🔄 Cập nhật năm
+          </button>
         </div>
       </div>
     </div>
@@ -249,24 +276,32 @@
       class="hidden bg-emerald-50 border border-emerald-300 rounded-xl p-4 flex items-center justify-between gap-4 flex-wrap"
     >
       <div class="flex items-center gap-3">
-        <span class="px-2.5 py-1 rounded-lg bg-emerald-600 text-white font-bold text-xs">🎉 XUẤT MP4 THÀNH CÔNG</span>
+        <span id="exportedBannerBadge" class="px-2.5 py-1 rounded-lg bg-emerald-600 text-white font-bold text-xs">🎉 XUẤT MP4 THÀNH CÔNG</span>
         <div class="text-xs text-slate-700">
           <div>
             Đã lưu trực tiếp tại: <strong id="exportedFilePath" class="font-mono text-slate-900"></strong>
             (<span id="exportedFileMeta" class="font-semibold text-emerald-800"></span>)
           </div>
-          <div class="text-slate-500 mt-0.5">
-            Định dạng chuẩn TikTok 1080×1920 (9:16, 30fps) • Đoạn bản tin đầu giữ tiếng gốc MC • Các đoạn năm đã tắt tiếng hoàn toàn.
+          <div id="exportedBannerSubtext" class="text-slate-500 mt-0.5">
+            Định dạng chuẩn TikTok 1080×1920 (9:16, 30fps) • Nếu có cảnh chưa ưng ý, bạn chỉ cần sửa ô cảnh bên dưới rồi bấm <strong>💾 Xuất đè lại MP4</strong>!
           </div>
         </div>
       </div>
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-2 flex-wrap">
+        <button
+          id="btnBannerRerenderNow"
+          type="button"
+          onclick="renderFinalVideo()"
+          class="hidden px-3.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-extrabold shadow-xs transition cursor-pointer animate-pulse"
+        >
+          💾 Xuất đè lại MP4 ngay (Cập nhật cảnh mới)
+        </button>
         <button
           type="button"
           onclick="toggleFinalPreviewModal()"
-          class="px-3 py-1.5 rounded-lg bg-white hover:bg-slate-100 border border-emerald-300 text-emerald-800 text-xs font-semibold transition cursor-pointer"
+          class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-xs transition cursor-pointer"
         >
-          ▶️ Xem file MP4
+          🎬 Xem & Hậu kiểm Video MP4
         </button>
         <a
           id="btnDirectDownloadMp4"
@@ -380,24 +415,45 @@
       </div>
     </div>
 
-    <!-- Final Video Preview Modal -->
+    <!-- Final Video Preview & Quick Scene Jump Modal -->
     <div
       id="finalPreviewModal"
       class="hidden fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4"
     >
-      <div class="bg-white border border-slate-200 rounded-2xl p-4 max-w-md w-full shadow-xl space-y-3">
-        <div class="flex items-center justify-between">
-          <h3 id="finalModalTitle" class="font-bold text-sm text-slate-900">Xem trước Video MP4 Thành phẩm (9:16)</h3>
+      <div class="bg-white border border-slate-200 rounded-2xl p-4 max-w-2xl w-full shadow-2xl space-y-3">
+        <div class="flex items-center justify-between border-b border-slate-100 pb-2.5">
+          <div>
+            <h3 id="finalModalTitle" class="font-bold text-sm text-slate-900">🎬 Xem & Kiểm duyệt Video MP4 Thành phẩm (9:16)</h3>
+            <p class="text-[11px] text-slate-500">Nếu thấy cảnh năm nào chưa ưng ý, bấm vào nút mốc năm bên phải để nhảy thẳng xuống ô cảnh đó và bấm <strong>✨ Đổi cảnh</strong> hoặc <strong>🔄 Đổi video</strong>!</p>
+          </div>
           <button
             type="button"
             onclick="toggleFinalPreviewModal()"
-            class="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold"
+            class="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer"
           >
             ✕ Đóng
           </button>
         </div>
-        <div class="bg-black rounded-xl overflow-hidden flex items-center justify-center" style="aspect-ratio: 9/16; max-height: 70vh; margin: 0 auto;">
-          <video id="finalVideoPlayer" controls class="w-full h-full object-contain"></video>
+        <div class="grid grid-cols-1 sm:grid-cols-12 gap-3 items-start">
+          <div class="sm:col-span-7 bg-black rounded-xl overflow-hidden flex items-center justify-center" style="aspect-ratio: 9/16; max-height: 68vh; margin: 0 auto;">
+            <video id="finalVideoPlayer" controls class="w-full h-full object-contain"></video>
+          </div>
+          <div class="sm:col-span-5 bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-2.5 max-h-[68vh] overflow-y-auto">
+            <div class="text-xs font-bold text-slate-800">🛠️ Nhảy nhanh tới ô cảnh để sửa:</div>
+            <div class="text-[11px] text-slate-500 leading-relaxed">
+              Bấm vào cảnh bạn muốn sửa bên dưới — cửa sổ sẽ đóng và cuộn thẳng tới đúng ô cảnh đó trên bảng lưới:
+            </div>
+            <div id="finalModalSceneJumpList" class="space-y-1.5"></div>
+            <div class="pt-2 border-t border-slate-200 space-y-1.5">
+              <button
+                type="button"
+                onclick="toggleFinalPreviewModal(); rerunCurrentCelebrity(true);"
+                class="w-full py-1.5 px-2.5 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 font-bold text-xs transition cursor-pointer"
+              >
+                🔄 Tự động Tìm & Xuất mới lại toàn bộ nhân vật này
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -1557,6 +1613,10 @@
         const progress_pct = matchItem ? (matchItem.progress_pct || 0) : 0;
         const total_duration = matchItem ? (matchItem.total_duration || 0) : 0;
         const output_path = matchItem ? (matchItem.output_path || '') : '';
+        const needs_rerender = Boolean(
+          (matchItem && matchItem.needs_rerender) ||
+          (currentProject && currentProject.project_id === (row.project_id || (matchItem && matchItem.project_id)) && currentProject.needs_rerender)
+        );
         const project_id = row.project_id || (matchItem && matchItem.project_id) || null;
         return {
           rowIdx,
@@ -1567,6 +1627,7 @@
           progress_pct,
           total_duration,
           output_path,
+          needs_rerender,
           project_id
         };
       });
@@ -1604,9 +1665,15 @@
 
       const activeModel = rowTabModels.find(m => m.rowIdx === activeTableRowIdx || (m.project_id && m.project_id === currentProjectId));
       if (btnCur) {
-        if (activeModel && (activeModel.status === 'ready_for_preview' || activeModel.status === 'completed') && totalCnt > 1) {
+        if (activeModel && (activeModel.status === 'ready_for_preview' || activeModel.status === 'completed')) {
           btnCur.classList.remove('hidden');
-          btnCur.innerText = `💾 Xuất Video (${activeModel.labelName})`;
+          if (activeModel.needs_rerender) {
+            btnCur.className = 'px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-extrabold shadow-xs cursor-pointer transition animate-pulse';
+            btnCur.innerText = `⚠️ Xuất đè lại MP4 (${activeModel.labelName})`;
+          } else {
+            btnCur.className = 'px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs cursor-pointer transition';
+            btnCur.innerText = `💾 Xuất Video (${activeModel.labelName})`;
+          }
         } else {
           btnCur.classList.add('hidden');
         }
@@ -1617,8 +1684,13 @@
         let statusIcon = '🕒';
         let metaBadge = 'Chưa quét';
         let colorCls = 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200';
+        const hasExportedMp4 = Boolean(m.output_path || m.status === 'completed');
 
-        if (m.output_path || m.status === 'completed') {
+        if (hasExportedMp4 && m.needs_rerender) {
+          statusIcon = '⚠️';
+          metaBadge = 'Đã sửa cảnh • Cần xuất lại';
+          colorCls = 'bg-amber-100 text-amber-950 border-amber-400 hover:bg-amber-200';
+        } else if (hasExportedMp4) {
           statusIcon = '✅';
           metaBadge = m.total_duration ? `Đã xuất MP4 • ${Number(m.total_duration).toFixed(1)}s` : 'Đã xuất MP4';
           colorCls = 'bg-emerald-100 text-emerald-950 border-emerald-400 hover:bg-emerald-200';
@@ -1653,6 +1725,17 @@
         }
 
         const ringCls = isSelected ? 'ring-2 ring-indigo-600 font-bold shadow-xs' : 'font-semibold';
+        const watchBtnHtml = (hasExportedMp4 && m.project_id) ? `
+          <button
+            type="button"
+            onclick="event.stopPropagation(); openExportedVideoForRow(${m.rowIdx}, '${m.project_id}');"
+            class="px-2 py-0.5 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold shadow-2xs cursor-pointer transition"
+            title="Xem & hậu kiểm ngay file MP4 đã xuất của ${escapeHtml(m.labelName)}"
+          >
+            🎬 Xem MP4
+          </button>
+        ` : '';
+
         return `
           <div class="inline-flex items-center rounded-xl border transition ${colorCls} ${ringCls}">
             <button
@@ -1665,10 +1748,11 @@
               <span>#${m.rowIdx + 1}. ${escapeHtml(m.labelName)}</span>
               <span class="px-1.5 py-0.5 rounded bg-white/80 text-[10px] font-mono">${escapeHtml(metaBadge)}</span>
             </button>
+            ${watchBtnHtml}
             <button
               type="button"
               onclick="event.stopPropagation(); clearTableRow(${m.rowIdx});"
-              class="pr-2.5 pl-1 py-1.5 text-slate-400 hover:text-rose-600 font-bold text-xs cursor-pointer"
+              class="pr-2.5 pl-1.5 py-1.5 text-slate-400 hover:text-rose-600 font-bold text-xs cursor-pointer"
               title="Xóa nhân vật ở Hàng #${m.rowIdx + 1} và đóng Tab này"
             >
               ✕
@@ -1776,14 +1860,73 @@
       const expDurEl = document.getElementById('btnExportDuration');
       if (expDurEl) expDurEl.innerText = totalDur > 0 ? `(${totalDur}s)` : '';
 
+      const hasExportedFile = Boolean(proj.final_video && proj.final_video.output_path);
+      const needsRerender = Boolean(proj.needs_rerender && hasExportedFile);
+
+      // Update main Export button & quick action buttons on active tab bar
+      const btnRenderFinal = document.getElementById('btnRenderFinal');
+      const btnRenderLabel = document.getElementById('btnRenderLabel');
+      const btnWatchQuick = document.getElementById('btnWatchExportedQuick');
+      const btnRerunCeleb = document.getElementById('btnRerunCurrentCeleb');
+
+      if (btnWatchQuick) {
+        if (hasExportedFile) btnWatchQuick.classList.remove('hidden');
+        else btnWatchQuick.classList.add('hidden');
+      }
+      if (btnRerunCeleb) {
+        if (proj.project_id && proj.status !== 'running') btnRerunCeleb.classList.remove('hidden');
+        else btnRerunCeleb.classList.add('hidden');
+      }
+      if (btnRenderFinal && btnRenderLabel) {
+        if (needsRerender) {
+          btnRenderFinal.className = 'px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-extrabold shadow-md transition cursor-pointer animate-pulse';
+          btnRenderLabel.innerText = '⚠️ Đã sửa cảnh — Bấm Xuất đè MP4';
+        } else {
+          btnRenderFinal.className = 'px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold shadow-sm transition cursor-pointer';
+          btnRenderLabel.innerText = hasExportedFile ? '💾 3. Xuất đè lại MP4' : '💾 3. Xuất Video';
+        }
+      }
+
+      // Sync batch item needs_rerender if in batch
+      if (currentBatch && Array.isArray(currentBatch.items)) {
+        const bIt = currentBatch.items.find(it => it.project_id === proj.project_id);
+        if (bIt) {
+          bIt.needs_rerender = needsRerender;
+        }
+      }
+
       // Sync Exported MP4 Notification Banner with the currently displayed project
       const expBanner = document.getElementById('exportedBanner');
-      if (proj.final_video && proj.final_video.output_path) {
+      const bannerBadge = document.getElementById('exportedBannerBadge');
+      const bannerSubtext = document.getElementById('exportedBannerSubtext');
+      const btnBannerRerender = document.getElementById('btnBannerRerenderNow');
+      if (hasExportedFile) {
         const fv = proj.final_video;
         lastExportedPath = fv.output_path;
         document.getElementById('exportedFilePath').innerText = fv.output_path;
         document.getElementById('exportedFileMeta').innerText = `${fv.total_duration}s • ${fv.file_size_mb} MB`;
         expBanner.classList.remove('hidden');
+        if (needsRerender) {
+          expBanner.className = 'bg-amber-50 border-2 border-amber-400 rounded-xl p-4 flex items-center justify-between gap-4 flex-wrap';
+          if (bannerBadge) {
+            bannerBadge.className = 'px-2.5 py-1 rounded-lg bg-amber-600 text-white font-bold text-xs';
+            bannerBadge.innerText = '⚠️ CẢNH VỪA ĐƯỢC SỬA — CẦN XUẤT ĐÈ LẠI MP4';
+          }
+          if (bannerSubtext) {
+            bannerSubtext.innerHTML = 'Bạn vừa đổi cảnh / chỉnh giây trên bảng lưới bên dưới. Hãy bấm <strong>💾 Xuất đè lại MP4 ngay</strong> để cập nhật các cảnh mới vào file video!';
+          }
+          if (btnBannerRerender) btnBannerRerender.classList.remove('hidden');
+        } else {
+          expBanner.className = 'bg-emerald-50 border border-emerald-300 rounded-xl p-4 flex items-center justify-between gap-4 flex-wrap';
+          if (bannerBadge) {
+            bannerBadge.className = 'px-2.5 py-1 rounded-lg bg-emerald-600 text-white font-bold text-xs';
+            bannerBadge.innerText = '🎉 XUẤT MP4 THÀNH CÔNG';
+          }
+          if (bannerSubtext) {
+            bannerSubtext.innerHTML = 'Định dạng chuẩn TikTok 1080×1920 (9:16, 30fps) • Nếu có cảnh chưa ưng ý, bạn chỉ cần sửa ô cảnh bên dưới rồi bấm <strong>💾 Xuất đè lại MP4</strong>!';
+          }
+          if (btnBannerRerender) btnBannerRerender.classList.add('hidden');
+        }
         if (fv.video_url) {
           document.getElementById('finalVideoPlayer').src = fv.video_url;
           const dlLink = document.getElementById('btnDirectDownloadMp4');
@@ -2443,14 +2586,168 @@
       }
     }
 
+    function populateFinalModalSceneJumpList(proj) {
+      const listEl = document.getElementById('finalModalSceneJumpList');
+      const titleEl = document.getElementById('finalModalTitle');
+      if (!listEl) return;
+      if (!proj) {
+        listEl.innerHTML = '';
+        return;
+      }
+      const cName = (proj.celeb_info && proj.celeb_info.name) ? proj.celeb_info.name : 'Nhân vật';
+      if (titleEl) {
+        titleEl.innerText = `🎬 Xem & Hậu kiểm Video MP4: ${cName}`;
+      }
+      let curOffset = 0;
+      const buttons = [];
+      if (proj.news_clip && proj.news_clip.status === 'ready') {
+        const nd = Number(proj.news_clip.duration_sec || 11.5);
+        buttons.push(`
+          <div class="flex items-center justify-between gap-1.5 bg-white border border-rose-200 rounded-lg p-1.5 text-xs">
+            <button type="button" onclick="seekFinalPreviewTo(${curOffset})" class="text-left font-bold text-rose-700 hover:underline cursor-pointer">
+              ▶️ 📺 Bản tin mở đầu (${formatMMSS(curOffset)})
+            </button>
+            <button type="button" onclick="jumpFromModalToCard('card-news-intro')" class="px-2 py-0.5 rounded bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-800 font-bold text-[11px] cursor-pointer">
+              🛠️ Sửa ô này
+            </button>
+          </div>
+        `);
+        curOffset += nd;
+      }
+      (proj.year_clips || []).forEach((yc, idx) => {
+        const yd = Number(yc.duration_sec || 4.4);
+        const startAt = curOffset;
+        const simPct = computeHonestAiPct(yc);
+        buttons.push(`
+          <div class="flex items-center justify-between gap-1.5 bg-white border border-slate-200 rounded-lg p-1.5 text-xs">
+            <button type="button" onclick="seekFinalPreviewTo(${startAt})" class="text-left font-bold text-slate-800 hover:text-blue-600 cursor-pointer">
+              ▶️ Năm ${yc.year} <span class="text-[10px] font-normal text-slate-500">(${formatMMSS(startAt)} • AI ${simPct}%)</span>
+            </button>
+            <button type="button" onclick="jumpFromModalToCard('card-year-slot-${idx}')" class="px-2 py-0.5 rounded bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-900 font-bold text-[11px] cursor-pointer">
+              ✨ Sửa năm ${yc.year}
+            </button>
+          </div>
+        `);
+        curOffset += yd;
+      });
+      listEl.innerHTML = buttons.join('');
+    }
+
+    function seekFinalPreviewTo(sec) {
+      const player = document.getElementById('finalVideoPlayer');
+      if (player) {
+        player.currentTime = Math.max(0, Number(sec) || 0);
+        player.play().catch(() => {});
+      }
+    }
+
+    function jumpFromModalToCard(cardId) {
+      const modal = document.getElementById('finalPreviewModal');
+      const player = document.getElementById('finalVideoPlayer');
+      if (modal) modal.classList.add('hidden');
+      if (player) player.pause();
+      const cardEl = document.getElementById(cardId);
+      if (cardEl) {
+        cardEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        cardEl.classList.add('ring-4', 'ring-amber-400');
+        setTimeout(() => cardEl.classList.remove('ring-4', 'ring-amber-400'), 2600);
+      }
+    }
+
+    async function openExportedVideoForRow(rowIdx, projectId) {
+      if (activeTableRowIdx !== rowIdx || currentProjectId !== projectId) {
+        await selectRowTab(rowIdx);
+      }
+      openExportedVideoForProject(projectId);
+    }
+
+    function openExportedVideoForProject(projectId) {
+      const modal = document.getElementById('finalPreviewModal');
+      const player = document.getElementById('finalVideoPlayer');
+      if (!modal || !player) return;
+      if (currentProject && currentProject.project_id === projectId && currentProject.final_video && currentProject.final_video.video_url) {
+        player.src = currentProject.final_video.video_url;
+        populateFinalModalSceneJumpList(currentProject);
+      } else if (projectId) {
+        player.src = `/api/projects/${projectId}/final-video?v=${Date.now()}`;
+        populateFinalModalSceneJumpList(currentProject);
+      }
+      modal.classList.remove('hidden');
+      if (player.src) {
+        player.play().catch(() => {});
+      }
+    }
+
     function toggleFinalPreviewModal() {
       const modal = document.getElementById('finalPreviewModal');
       const player = document.getElementById('finalVideoPlayer');
       modal.classList.toggle('hidden');
       if (modal.classList.contains('hidden')) {
         player.pause();
-      } else if (player.src) {
-        player.play().catch(() => {});
+      } else {
+        populateFinalModalSceneJumpList(currentProject);
+        if (player.src) {
+          player.play().catch(() => {});
+        }
+      }
+    }
+
+    async function applyUpdatedYearsForCurrentTab() {
+      if (!currentProjectId) {
+        alert('Hãy bấm "🔍 1. Quét Nhân Vật" hoặc "🚀 2. Tạo Video" trước!');
+        return;
+      }
+      const newYears = parseYearsInput();
+      if (!newYears || newYears.length < 2) {
+        alert('Vui lòng nhập ít nhất 2 mốc năm hợp lệ (ngăn cách bằng dấu phẩy)!');
+        return;
+      }
+      try {
+        setRunningButtonsState(true, 'Cập nhật năm');
+        const res = await fetch(`/api/projects/${currentProjectId}/rerun`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            years: newYears,
+            auto_render: false,
+            keep_news: true,
+            keep_matching_years: true
+          })
+        });
+        const proj = await safeReadJson(res);
+        if (!res.ok) throw new Error(proj.detail || 'Không thể cập nhật mốc năm');
+        renderStoryboard(proj);
+        if (!pollTimer) pollTimer = setInterval(pollProjectStatus, 1800);
+        if (currentBatchId && !batchPollTimer) batchPollTimer = setInterval(pollBatchStatus, 2000);
+      } catch (e) {
+        alert('Lỗi cập nhật năm: ' + e.message);
+        setRunningButtonsState(false);
+      }
+    }
+
+    async function rerunCurrentCelebrity(autoRenderAfter = false) {
+      if (!currentProjectId) return;
+      const newYears = parseYearsInput();
+      try {
+        setRunningButtonsState(true, 'Chạy lại 1 nhân vật');
+        const res = await fetch(`/api/projects/${currentProjectId}/rerun`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            years: newYears,
+            auto_render: Boolean(autoRenderAfter),
+            keep_news: false,
+            keep_matching_years: false
+          })
+        });
+        const proj = await safeReadJson(res);
+        if (!res.ok) throw new Error(proj.detail || 'Không thể chạy lại nhân vật này');
+        renderStoryboard(proj);
+        if (!pollTimer) pollTimer = setInterval(pollProjectStatus, 1800);
+        if (currentBatchId && !batchPollTimer) batchPollTimer = setInterval(pollBatchStatus, 2000);
+      } catch (e) {
+        alert('Lỗi chạy lại nhân vật: ' + e.message);
+        setRunningButtonsState(false);
       }
     }
 

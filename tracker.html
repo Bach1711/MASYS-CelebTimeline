@@ -60,7 +60,7 @@
           <span id="statTodo" class="px-3 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-300">Todo: 0</span>
           <span id="statInProgress" class="px-3 py-1 rounded-full bg-blue-100 text-blue-800 border border-blue-200">In Progress: 0</span>
           <span id="statReview" class="px-3 py-1 rounded-full bg-amber-100 text-amber-800 border border-amber-200">Review: 0</span>
-          <span id="statDone" class="px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">Done: 19</span>
+          <span id="statDone" class="px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">Done: 20</span>
         </div>
       </div>
 
@@ -68,7 +68,7 @@
         <div id="overallProgressBar" class="bg-emerald-500 h-full transition-all duration-300" style="width: 100%"></div>
       </div>
       <div class="flex justify-between text-xs text-slate-600 font-semibold">
-        <span id="overallProgressLabel">Hoàn thành: 100% (19/19 Tickets)</span>
+        <span id="overallProgressLabel">Hoàn thành: 100% (20/20 Tickets)</span>
         <span>Chuẩn nghiệm thu: Khung dọc 9:16 (1080×1920) • Giữ tiếng bản tin đầu • Tắt tiếng các năm</span>
       </div>
     </div>
@@ -368,6 +368,20 @@
           "Điều tiết request Wikipedia (_WIKI_RATE_SEMAPHORE + retry tự động khi gặp HTTP 429) và kế thừa dữ liệu ứng viên batch, loại bỏ hoàn toàn lỗi fallback về 1955-2026.",
           "Luôn tải và lưu cache tối thiểu 1-4 ảnh chân dung mẫu AI (reference_images) trong workspace/_cache_celebs để bộ lọc khuôn mặt AI hoạt động chính xác 100%.",
           "Tự động phát hiện và quét lại (self-healing) mọi dòng/project cũ bị dính dữ liệu lỗi (1955-2026 hoặc 0 ảnh mẫu AI) khi bấm Quét hoặc Chạy Tự Động A-Z."
+        ]
+      },
+      {
+        id: "CON-228",
+        url: "https://linear.app/conducdaudan/issue/CON-228/post-export-review-and-re-edit-xem-nhanh-video-dja-xuat-tu-djong-bao",
+        title: "[Post-Export Review & Re-Edit] Xem nhanh Video Đã Xuất, Tự động báo \"Cần Xuất Lại MP4\" khi sửa cảnh & Chạy lại riêng 1 nhân vật",
+        priority: "Urgent",
+        status: "Done",
+        module: "app.py, static/index.html",
+        description: "Nâng cấp toàn diện quy trình Hậu kiểm & Chỉnh sửa lại video sau khi chạy Tự Động A-Z: Nút 🎬 Xem MP4 ngay trên từng Tab và thanh điều khiển mở cửa sổ Xem & Hậu kiểm kèm danh sách mốc năm để bấm tua nhanh hoặc nhảy thẳng xuống ô cảnh cần sửa; tự động phát hiện khi người dùng sửa cảnh sau khi đã xuất MP4 (needs_rerender) và chuyển nút Xuất sang màu cam nổi bật ⚠️ Đã sửa cảnh — Bấm Xuất đè MP4; bổ sung nút 🔄 Cập nhật năm (chỉ tìm năm mới) và 🔄 Tìm mới lại nhân vật này.",
+        dod: [
+          "Nút 🎬 Xem MP4 ngay trên từng Tab nhân vật đã xuất và trên thanh điều khiển mở cửa sổ phát MP4 9:16 kèm danh sách mốc năm để tua nhanh hoặc bấm '✨ Sửa năm X' nhảy thẳng xuống ô cảnh đó trên bảng lưới.",
+          "Khi đã xuất MP4 mà người dùng bấm Đổi cảnh / Đổi video / Chỉnh giây / Thêm-Xóa cảnh / Đổi bản tin, hệ thống tự động bật trạng thái màu cam '⚠️ Đã sửa cảnh — Bấm Xuất đè MP4' trên cả thanh công cụ, Tab nhân vật và Banner thông báo.",
+          "Nút '🔄 Cập nhật năm' (giữ nguyên các năm cũ, chỉ tìm năm mới sửa) và '🔄 Tìm mới lại nhân vật này' (chạy lại riêng 1 Tab nhân vật) hoạt động độc lập không ảnh hưởng các Tab khác."
         ]
       }
     ];

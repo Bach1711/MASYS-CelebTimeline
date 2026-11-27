@@ -1,9 +1,9 @@
 {
-  "version": "ver 0.8",
-  "sha": "e3809ac78efb1ee1a12124f6da742f06980b7a15",
-  "short_sha": "e3809ac",
-  "message": "fix(CON-227): fix Wikipedia HTTP 429 rate-limit causing 1955-2026 & 0 reference images + auto-repair corrupted scans (ver 0.8)",
-  "date": "2026-11-27 11:55:00 +0700",
+  "version": "ver 0.9",
+  "sha": "ec020f843d4854d600cf45b18c9072d85a0667b7",
+  "short_sha": "ec020f8",
+  "message": "feat(CON-228): post-export MP4 review modal with scene jump, needs_rerender orange alert & single-tab rerun/update years (ver 0.9)",
+  "date": "2026-11-27 15:57:00 +0700",
   "author": "BachVu",
   "repo": "Bach1711/MASYS-CelebTimeline",
   "branch": "main"

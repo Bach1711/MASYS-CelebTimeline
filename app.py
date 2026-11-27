@@ -254,9 +254,21 @@ def _to_web_url(abs_path: Optional[str]) -> str:
         return ""
 
 
+def _mark_project_needs_rerender_locked(proj: Dict[str, Any]):
+    """
+    When the user modifies any scene (News clip or Year clip) on an already-exported project,
+    automatically flag `needs_rerender = True` so the UI highlights the Export button in orange
+    to remind the user to overwrite the MP4 file with the newly edited scenes.
+    """
+    fv = proj.get("final_video")
+    if isinstance(fv, dict) and fv.get("output_path"):
+        proj["needs_rerender"] = True
+
+
 def _serialize_project(proj: Dict[str, Any]) -> Dict[str, Any]:
     out = json.loads(json.dumps(proj, default=str))
     project_id = out.get("project_id", "")
+    out["needs_rerender"] = bool(out.get("needs_rerender", False))
     if out.get("news_clip"):
         nc = out["news_clip"]
         nc["clip_url"] = _to_web_url(nc.get("clip_path"))
@@ -1128,9 +1140,11 @@ def _sync_batch_items(batch_id: str) -> Optional[Dict[str, Any]]:
                 if p.get("final_video") and p["final_video"].get("output_path"):
                     item["total_duration"] = p["final_video"].get("total_duration", cut_dur)
                     item["output_path"] = p["final_video"].get("output_path", "")
+                    item["needs_rerender"] = bool(p.get("needs_rerender", False))
                     if p.get("status") != "running":
                         item["status"] = "completed"
                 elif p.get("status") == "running":
+                    item["needs_rerender"] = False
                     item["status"] = "running"
                 elif p.get("status") == "paused":
                     item["total_duration"] = cut_dur
@@ -2054,6 +2068,7 @@ def api_swap_news(project_id: str, req: SwapNewsRequest):
                     "start_sec": 0.0,
                     "candidates": current_news.get("candidates", []),
                 }
+                _mark_project_needs_rerender_locked(PROJECTS[project_id])
             _save_project_state(project_id)
             return _serialize_project(PROJECTS[project_id])
 
@@ -2079,6 +2094,7 @@ def api_swap_news(project_id: str, req: SwapNewsRequest):
             current_news["status"] = "ready"
             with PROJECTS_LOCK:
                 PROJECTS[project_id]["news_clip"] = current_news
+                _mark_project_needs_rerender_locked(PROJECTS[project_id])
             _save_project_state(project_id)
             return _serialize_project(PROJECTS[project_id])
 
@@ -2098,6 +2114,7 @@ def api_swap_news(project_id: str, req: SwapNewsRequest):
         new_news["status"] = "ready"
         with PROJECTS_LOCK:
             PROJECTS[project_id]["news_clip"] = new_news
+            _mark_project_needs_rerender_locked(PROJECTS[project_id])
         _save_project_state(project_id)
         return _serialize_project(PROJECTS[project_id])
     except HTTPException:
@@ -2231,6 +2248,7 @@ def api_swap_year(project_id: str, req: SwapYearClipRequest):
                     ins_idx = ins_idx + 1
                 PROJECTS[project_id]["year_clips"].insert(ins_idx, sc2)
                 PROJECTS[project_id]["years"] = [int(x.get("year") or req.year) for x in PROJECTS[project_id]["year_clips"]]
+                _mark_project_needs_rerender_locked(PROJECTS[project_id])
             _save_project_state(project_id)
             return _serialize_project(PROJECTS[project_id])
 
@@ -2246,6 +2264,7 @@ def api_swap_year(project_id: str, req: SwapYearClipRequest):
                 if rem_idx is not None and 0 <= rem_idx < len(live_clips):
                     PROJECTS[project_id]["year_clips"].pop(rem_idx)
                     PROJECTS[project_id]["years"] = [int(x.get("year") or req.year) for x in PROJECTS[project_id]["year_clips"]]
+                    _mark_project_needs_rerender_locked(PROJECTS[project_id])
             _save_project_state(project_id)
             return _serialize_project(PROJECTS[project_id])
 
@@ -2267,6 +2286,7 @@ def api_swap_year(project_id: str, req: SwapYearClipRequest):
                     upd_idx = _locate_target_year_slot(live_clips, target_idx, req.year, orig_clip_id, orig_scene_idx)
                     if upd_idx is not None:
                         PROJECTS[project_id]["year_clips"][upd_idx] = new_yc
+                        _mark_project_needs_rerender_locked(PROJECTS[project_id])
                 _save_project_state(project_id)
                 return _serialize_project(PROJECTS[project_id])
 
@@ -2329,6 +2349,7 @@ def api_swap_year(project_id: str, req: SwapYearClipRequest):
                 if upd_idx is not None:
                     PROJECTS[project_id]["year_clips"][upd_idx] = new_yc
                     PROJECTS[project_id]["years"] = [int(x.get("year") or req.year) for x in PROJECTS[project_id]["year_clips"]]
+                    _mark_project_needs_rerender_locked(PROJECTS[project_id])
             _save_project_state(project_id)
             return _serialize_project(PROJECTS[project_id])
 
@@ -2382,6 +2403,7 @@ def api_swap_year(project_id: str, req: SwapYearClipRequest):
             if upd_idx is not None:
                 PROJECTS[project_id]["year_clips"][upd_idx] = new_yc
                 PROJECTS[project_id]["years"] = [int(x.get("year") or req_yr) for x in PROJECTS[project_id]["year_clips"]]
+                _mark_project_needs_rerender_locked(PROJECTS[project_id])
         _save_project_state(project_id)
         return _serialize_project(PROJECTS[project_id])
     except HTTPException:
@@ -2646,8 +2668,99 @@ def _render_project_internal(
         PROJECTS[project_id]["output_folder"] = target_folder
         PROJECTS[project_id]["final_video"] = res
         PROJECTS[project_id]["status"] = "completed"
+        PROJECTS[project_id]["needs_rerender"] = False
     _save_project_state(project_id)
     return _serialize_project(PROJECTS[project_id])
+
+
+class UpdateYearsOrRerunRequest(BaseModel):
+    years: Optional[List[int]] = None
+    auto_render: bool = False
+    keep_news: bool = True
+    keep_matching_years: bool = True
+
+
+@app.post("/api/projects/{project_id}/rerun")
+def api_rerun_single_project(project_id: str, req: UpdateYearsOrRerunRequest):
+    """
+    Re-run or selectively update years for a SINGLE celebrity Tab without disturbing other Tabs in the batch!
+    - If `keep_matching_years=True`, keeps already-cut year clips whose year is still in `req.years`,
+      and only searches & cuts the newly added/changed years!
+    - If `keep_matching_years=False` ("🔄 Chạy mới lại nhân vật này"), resets all year clips (and optionally news clip)
+      and runs fresh discovery + cutting (plus optional auto_render) for this celebrity.
+    """
+    proj = _ensure_project_loaded(project_id)
+    if not proj:
+        raise HTTPException(status_code=404, detail="Không tìm thấy dự án nhân vật này.")
+
+    clear_pipeline_cancel()
+    with PROJECTS_LOCK:
+        p = PROJECTS[project_id]
+        base_d = float(p.get("year_clip_duration") or 4.5)
+        new_years = sorted(set(int(y) for y in (req.years or p.get("years") or []) if 1920 <= int(y) <= 2035))
+        if not new_years:
+            new_years = list((p.get("celeb_info") or {}).get("recommended_years") or [1980, 1985, 1990, 1995, 2000, 2005, 2010])
+        p["years"] = new_years
+        p["auto_render"] = bool(req.auto_render)
+        p["status"] = "running"
+        p["progress_pct"] = 5
+        p["progress_message"] = "⚡ Đang cập nhật / tìm lại cảnh cho nhân vật này..."
+        _mark_project_needs_rerender_locked(p)
+
+        if not req.keep_news:
+            p["news_clip"] = {
+                "status": "processing",
+                "title": "Đang tìm & cắt mới bản tin mở đầu...",
+                "duration_sec": float(p.get("news_duration") or 11.5),
+            }
+
+        existing_by_year: Dict[int, List[Dict[str, Any]]] = {}
+        if req.keep_matching_years:
+            for yc in (p.get("year_clips") or []):
+                if isinstance(yc, dict) and yc.get("status") == "ready" and yc.get("clip_path") and os.path.exists(yc["clip_path"]):
+                    yr_k = int(yc.get("year") or 0)
+                    existing_by_year.setdefault(yr_k, []).append(yc)
+
+        rebuilt_clips: List[Dict[str, Any]] = []
+        for idx, y_val in enumerate(new_years):
+            if y_val in existing_by_year and existing_by_year[y_val]:
+                kept = dict(existing_by_year[y_val].pop(0))
+                kept["slot_index"] = idx
+                rebuilt_clips.append(kept)
+            else:
+                rebuilt_clips.append(
+                    {
+                        "slot_index": idx,
+                        "year": y_val,
+                        "requested_year": y_val,
+                        "scene_index": 1,
+                        "status": "pending",
+                        "title": f"Đang chờ tìm video năm {y_val}...",
+                        "duration_sec": base_d,
+                    }
+                )
+        p["year_clips"] = rebuilt_clips
+
+        # Also update any batch item referencing this project_id
+        for b_obj in BATCHES.values():
+            for it in b_obj.get("items", []):
+                if it.get("project_id") == project_id:
+                    it["status"] = "running"
+                    it["progress_pct"] = 5
+                    it["progress_message"] = p["progress_message"]
+
+    _save_project_state(project_id)
+    _save_batches_state()
+
+    t = threading.Thread(
+        target=_run_full_pipeline_worker,
+        args=(project_id, bool(req.auto_render)),
+        daemon=True,
+    )
+    t.start()
+
+    with PROJECTS_LOCK:
+        return _serialize_project(PROJECTS[project_id])
 
 
 @app.post("/api/projects/{project_id}/render")
