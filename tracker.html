@@ -60,7 +60,7 @@
           <span id="statTodo" class="px-3 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-300">Todo: 0</span>
           <span id="statInProgress" class="px-3 py-1 rounded-full bg-blue-100 text-blue-800 border border-blue-200">In Progress: 0</span>
           <span id="statReview" class="px-3 py-1 rounded-full bg-amber-100 text-amber-800 border border-amber-200">Review: 0</span>
-          <span id="statDone" class="px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">Done: 17</span>
+          <span id="statDone" class="px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">Done: 18</span>
         </div>
       </div>
 
@@ -68,7 +68,7 @@
         <div id="overallProgressBar" class="bg-emerald-500 h-full transition-all duration-300" style="width: 100%"></div>
       </div>
       <div class="flex justify-between text-xs text-slate-600 font-semibold">
-        <span id="overallProgressLabel">Hoàn thành: 100% (17/17 Tickets)</span>
+        <span id="overallProgressLabel">Hoàn thành: 100% (18/18 Tickets)</span>
         <span>Chuẩn nghiệm thu: Khung dọc 9:16 (1080×1920) • Giữ tiếng bản tin đầu • Tắt tiếng các năm</span>
       </div>
     </div>
@@ -340,6 +340,20 @@
           "Khâu 1 (Quét Nhân Vật): Chạy ThreadPoolExecutor(max_workers=4) tra cứu Wikipedia & tải ảnh mẫu song song cho bảng 3–20 hàng.",
           "Khâu 2 (Tìm & Cắt Năm): Chạy 3 luồng song song trên Storyboard, có claim_lock đặt chỗ nguyên tử used_video_ids để không lấy trùng video YouTube giữa các luồng.",
           "Khâu 3 (Xuất MP4): Chạy 4 tiến trình FFmpeg chuẩn hóa khung dọc 1080×1920 & vẽ nhãn song song trước khi ghép concat, rút ngắn thời gian xuất MP4 xuống ~5–7 giây."
+        ]
+      },
+      {
+        id: "CON-226",
+        url: "https://linear.app/conducdaudan/issue/CON-226/reliability-and-full-auto-trigger-chong-treo-tu-djoi-nam-auto-pause-mo",
+        title: "[Reliability & Full-Auto Trigger] Chống treo tự đổi năm / Auto-Pause, Mở lại App sạch + Tiếp tục chạy tác vụ dở & Nút Trigger Chạy Tự Động A-Z",
+        priority: "Urgent",
+        status: "Done",
+        module: "youtube_pipeline.py, app.py, launcher.py, static/index.html",
+        description: "Bổ sung socket_timeout/deadline chống treo khi tải YouTube, tự động đổi sang năm dự phòng khi một năm không có cảnh hoặc quá thời gian, Watchdog Auto-Pause khi mạng/tiến trình treo; khi mở lại app tự động chuyển các tác vụ đang chạy dở về trạng thái Paused (không tự chạy ngầm, tắt spam log console) kèm nút ▶️ Tiếp tục Chạy; bổ sung nút Trigger 1 chạm ⚡ Chạy Tự Động A-Z (Quét ➔ Cắt ➔ Xuất MP4).",
+        dod: [
+          "Tự động đổi sang năm dự phòng khác khi một mốc năm tìm hết ứng viên / quá 75s không có cảnh; tự động Pause & báo lỗi nếu tiến trình treo quá 3 phút.",
+          "Khi tắt đi mở lại app, mọi tác vụ phiên trước ở trạng thái nghỉ (Paused), không spam polling log trên CMD; bấm ▶️ Tiếp tục Chạy sẽ chạy nốt phần còn dở (giữ nguyên các cảnh đã cắt xong).",
+          "Nút Trigger ⚡ Chạy Tự Động A-Z (Quét ➔ Cắt ➔ Xuất MP4) tự động chạy xuyên suốt từ Quét Wikipedia đến Tìm & Cắt Video và Xuất thẳng file MP4 vào thư mục Output."
         ]
       }
     ];

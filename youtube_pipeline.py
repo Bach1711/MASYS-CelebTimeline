@@ -164,10 +164,17 @@ def extract_thumbnail(video_path: str, thumb_path: str, time_sec: float = 1.5) -
 
 
 def _attach_cookies_opt(ydl_opts: Dict[str, Any]) -> Dict[str, Any]:
-    """Attach optional `cookies.txt` in app root if user provided YouTube cookies to bypass rate/bot checks."""
+    """
+    Attach optional `cookies.txt` in app root if user provided YouTube cookies to bypass rate/bot checks,
+    and enforce strict socket/retry timeouts so yt-dlp NEVER hangs indefinitely on a stalled stream.
+    """
     cookies_path = os.path.join(_EXE_ROOT_DIR, "cookies.txt")
     if os.path.exists(cookies_path) and os.path.getsize(cookies_path) > 20:
         ydl_opts["cookiefile"] = cookies_path
+    ydl_opts.setdefault("socket_timeout", 15)
+    ydl_opts.setdefault("retries", 2)
+    ydl_opts.setdefault("fragment_retries", 2)
+    ydl_opts.setdefault("extractor_retries", 2)
     return ydl_opts
 
 
@@ -420,9 +427,13 @@ def download_youtube_section(
         else "bestvideo[height<=720][ext=mp4]/best[height<=720][ext=mp4]/best[height<=720]"
     )
 
+    dl_call_start = time.time()
+
     def _cancel_hook(d):
         if is_pipeline_cancelled():
             raise RuntimeError("PIPELINE_CANCELLED")
+        if time.time() - dl_call_start > 55.0:
+            raise RuntimeError("DOWNLOAD_SECTION_TIMEOUT")
 
     uniq_tag = f"{threading.get_ident()}_{int(time.time() * 1000) % 1000000}"
     temp_base = output_path.replace(".mp4", f"_temp_{uniq_tag}")
@@ -435,6 +446,7 @@ def download_youtube_section(
         "ffmpeg_location": os.path.dirname(FFMPEG_BIN),
         "download_ranges": yt_dlp.utils.download_range_func(None, [(start_sec, end_sec)]),
         "force_keyframes_at_cuts": True,
+        "external_downloader_args": {"ffmpeg_i": ["-rw_timeout", "15000000"]},
         "progress_hooks": [_cancel_hook],
     })
 
@@ -1067,6 +1079,7 @@ def find_and_prepare_year_clip(
     pre_discovered_candidates: Optional[List[Dict[str, Any]]] = None,
     scene_index: int = 1,
     claim_lock: Optional[threading.Lock] = None,
+    max_slot_seconds: float = 85.0,
 ) -> Dict[str, Any]:
     """
     Search YouTube for `<Celeb Name> <Year>`, strictly validate that candidate videos
@@ -1074,9 +1087,12 @@ def find_and_prepare_year_clip(
     that the main celebrity is clearly on screen with live motion and no text overlays.
     Thread-safe: when `claim_lock` is provided, atomically claims `video_id` in `used_video_ids`
     before downloading so 3 concurrent worker threads never pick the same YouTube video.
+    Enforces `max_slot_seconds` deadline so no single year slot can ever hang indefinitely.
     """
     if is_pipeline_cancelled():
         raise RuntimeError("PIPELINE_CANCELLED")
+
+    slot_start_ts = time.time()
 
     clean_celeb = _clean_person_name_for_search(celeb_name)
     current_year = datetime.datetime.now().year
@@ -1205,6 +1221,8 @@ def find_and_prepare_year_clip(
         for cand in ordered[:6]:
             if is_pipeline_cancelled():
                 raise RuntimeError("PIPELINE_CANCELLED")
+            if time.time() - slot_start_ts > max_slot_seconds:
+                break
             vid = cand["video_id"]
             if not _try_claim_vid(vid):
                 continue
@@ -1227,6 +1245,8 @@ def find_and_prepare_year_clip(
                         windows.append((w3_start, 50.0))
 
             for w_idx, (dl_start, dl_dur) in enumerate(windows):
+                if time.time() - slot_start_ts > max_slot_seconds:
+                    break
                 raw_path = os.path.join(year_dir, f"raw_{vid}_w{w_idx}.mp4")
                 if not download_youtube_section(cand["url"], raw_path, start_sec=dl_start, duration_sec=dl_dur, with_audio=False):
                     continue

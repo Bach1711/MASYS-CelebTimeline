@@ -1,9 +1,9 @@
 {
-  "version": "ver 0.5",
-  "sha": "579437f83af552d64a98599051bfb7cb7a1c8e33",
-  "short_sha": "579437f",
-  "message": "feat(batch-mt): run up to 3 celebrity tabs simultaneously in parallel & fix auto-restart quote escaping (ver 0.5)",
-  "date": "2026-11-27 10:23:37 +0700",
+  "version": "ver 0.6",
+  "sha": "d8854a5220ef2901bc06512bc318640a408bd940",
+  "short_sha": "d8854a5",
+  "message": "feat(CON-226): anti-hang timeout with auto replacement year & watchdog pause, clean startup pause/resume & 1-click Full-Auto A-Z trigger (ver 0.6)",
+  "date": "2026-11-27 11:13:28 +0700",
   "author": "BachVu",
   "repo": "Bach1711/MASYS-CelebTimeline",
   "branch": "main"

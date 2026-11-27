@@ -84,10 +84,28 @@
 
           <div class="flex items-center gap-2 flex-wrap">
             <button
+              id="btnFullAutoTrigger"
+              type="button"
+              onclick="runFullAutoTrigger()"
+              class="px-4 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-black shadow-sm transition cursor-pointer"
+              title="Nút Trigger 1 chạm: Tự động chạy từ đầu đến cuối (Quét Nhân Vật ➔ Tìm & Cắt Video Đa luồng ➔ Tự động Xuất thẳng file MP4 vào thư mục Output)"
+            >
+              ⚡ Chạy Tự Động A-Z (Quét ➔ Cắt ➔ Xuất MP4)
+            </button>
+            <button
+              id="btnResumeUnfinished"
+              type="button"
+              onclick="resumeUnfinishedTasks()"
+              class="hidden px-4 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-black shadow-sm transition cursor-pointer"
+              title="Tiếp tục chạy nốt các nhân vật và các cảnh năm còn đang làm dở (giữ nguyên 100% các cảnh đã cắt xong)"
+            >
+              ▶️ Tiếp tục Chạy
+            </button>
+            <button
               id="btnScanCelebs"
               type="button"
               onclick="scanAllTableRows()"
-              class="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 text-xs font-black shadow-sm transition cursor-pointer"
+              class="px-3.5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 text-xs font-black shadow-sm transition cursor-pointer"
               title="Quét thông tin Wikipedia, sửa lỗi chính tả và duyệt đúng nhân vật trước khi tạo video"
             >
               🔍 1. Quét Nhân Vật
@@ -95,8 +113,8 @@
             <button
               id="btnStartPipeline"
               type="button"
-              onclick="startPipeline()"
-              class="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold shadow-sm transition cursor-pointer"
+              onclick="startPipeline(false, false)"
+              class="px-3.5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold shadow-sm transition cursor-pointer"
               title="Tìm & Cắt video cho toàn bộ các nhân vật đã nhập trong bảng"
             >
               🚀 2. Tạo Video (Tìm & Cắt)
@@ -1271,6 +1289,8 @@
 
     function setRunningButtonsState(isRunning, countLabel = '') {
       const btnStart = document.getElementById('btnStartPipeline');
+      const btnFullAuto = document.getElementById('btnFullAutoTrigger');
+      const btnResume = document.getElementById('btnResumeUnfinished');
       const btnStop = document.getElementById('btnStopPipeline');
       if (btnStart) {
         btnStart.disabled = isRunning;
@@ -1278,8 +1298,44 @@
           ? `⏳ Đang tìm & cắt${countLabel ? ' (' + countLabel + ')' : ''}...`
           : '🚀 2. Tạo Video (Tìm & Cắt)';
       }
+      if (btnFullAuto) {
+        btnFullAuto.disabled = isRunning;
+        btnFullAuto.innerText = isRunning
+          ? `⏳ Đang chạy A-Z${countLabel ? ' (' + countLabel + ')' : ''}...`
+          : '⚡ Chạy Tự Động A-Z (Quét ➔ Cắt ➔ Xuất MP4)';
+      }
+      if (btnResume) {
+        btnResume.disabled = isRunning;
+        if (isRunning) btnResume.classList.add('hidden');
+      }
       if (btnStop) {
         btnStop.disabled = !isRunning;
+      }
+    }
+
+    function updateResumeButtonVisibility(proj, batch) {
+      const btnResume = document.getElementById('btnResumeUnfinished');
+      if (!btnResume) return;
+      const isCurrentlyRunning = (proj && proj.status === 'running') || (batch && batch.status === 'running');
+      if (isCurrentlyRunning) {
+        btnResume.classList.add('hidden');
+        return;
+      }
+      let hasUnfinished = false;
+      if (proj && (proj.status === 'paused' || proj.status === 'stopped')) {
+        hasUnfinished = true;
+      } else if (proj && Array.isArray(proj.year_clips) && proj.year_clips.some(yc => yc.status === 'pending' || yc.status === 'processing')) {
+        hasUnfinished = true;
+      }
+      if (batch && (batch.status === 'paused' || batch.status === 'stopped')) {
+        hasUnfinished = true;
+      } else if (batch && Array.isArray(batch.items) && batch.items.some(it => it.status === 'paused' || it.status === 'stopped' || it.status === 'queued')) {
+        hasUnfinished = true;
+      }
+      if (hasUnfinished) {
+        btnResume.classList.remove('hidden');
+      } else {
+        btnResume.classList.add('hidden');
       }
     }
 
@@ -1322,12 +1378,25 @@
       saveUiState();
     }
 
-    // --- Pipeline, Batch Mode & Storyboard ---
-    async function startPipeline() {
+    // --- Pipeline, Batch Mode, Resume & Full-Auto A-Z Trigger ---
+    async function runFullAutoTrigger() {
+      await startPipeline(true, false);
+    }
+
+    async function resumeUnfinishedTasks() {
+      const autoRenderMode = Boolean(currentBatch && currentBatch.auto_render);
+      await startPipeline(autoRenderMode, true);
+    }
+
+    async function startPipeline(autoRender = false, resumeUnfinished = false) {
       let filled = getFilledTableRows();
       const output_folder = document.getElementById('outputFolderInput').value.trim();
       if (!filled.length) {
         alert('Vui lòng nhập ít nhất 1 tên người nổi tiếng vào bảng!');
+        return;
+      }
+      if (autoRender && !output_folder) {
+        alert('Vui lòng chọn hoặc nhập Thư mục lưu video đầu ra trước khi bấm Chạy Tự Động A-Z!');
         return;
       }
 
@@ -1339,7 +1408,9 @@
         filled = getFilledTableRows();
       }
 
-      wipeStoryboardDOM();
+      if (!resumeUnfinished) {
+        wipeStoryboardDOM();
+      }
 
       const batchItemsPayload = filled.map(({ rowIdx, row }) => ({
         row_index: rowIdx,
@@ -1369,10 +1440,11 @@
             output_folder,
             news_duration: 11.5,
             year_clip_duration: 4.2,
-            auto_render: false
+            auto_render: Boolean(autoRender),
+            resume_unfinished: Boolean(resumeUnfinished)
           })
         });
-        const data = await res.json();
+        const data = await safeReadJson(res);
         if (!res.ok) {
           throw new Error(data.detail || 'Lỗi khởi tạo tiến trình tạo video');
         }
@@ -1490,10 +1562,15 @@
       const readyOrExportedCount = rowTabModels.filter(m => m.status === 'ready_for_preview' || m.status === 'completed' || !!m.output_path).length;
       const exportedCount = rowTabModels.filter(m => !!m.output_path || m.status === 'completed').length;
       const runningCnt = rowTabModels.filter(m => m.status === 'running').length;
+      const pausedCnt = rowTabModels.filter(m => m.status === 'paused' || m.status === 'stopped').length;
       const isAnyRunning = (batch && batch.status === 'running') || runningCnt > 0;
+      updateResumeButtonVisibility(currentProject, batch);
 
       if (isAnyRunning) {
-        summaryEl.innerText = `⚡ Đa luồng (${runningCnt} nhân vật đang chạy song song): Đã xong ${readyOrExportedCount}/${totalCnt} nhân vật (Bấm vào bất kỳ Tab nào để xem trực tiếp)`;
+        const modeTxt = (batch && batch.auto_render) ? '⚡ Chạy Tự Động A-Z' : '⚡ Đa luồng';
+        summaryEl.innerText = `${modeTxt} (${runningCnt} nhân vật đang chạy song song): Đã xong ${readyOrExportedCount}/${totalCnt} nhân vật (Bấm vào bất kỳ Tab nào để xem trực tiếp)`;
+      } else if (pausedCnt > 0) {
+        summaryEl.innerText = `⏸️ Có ${pausedCnt} nhân vật đang tạm dừng (chưa chạy xong) — Bấm "▶️ Tiếp tục Chạy" trên thanh điều khiển để làm nốt phần còn dở!`;
       } else if (exportedCount === totalCnt && totalCnt > 0) {
         summaryEl.innerText = `🎉 Đã xuất MP4 hoàn tất cho cả ${exportedCount}/${totalCnt} nhân vật!`;
       } else if (readyOrExportedCount > 0) {
@@ -1539,6 +1616,10 @@
           statusIcon = '⏳';
           metaBadge = `Đang cắt ${m.progress_pct || 5}%`;
           colorCls = 'bg-blue-50 text-blue-900 border-blue-300 hover:bg-blue-100';
+        } else if (m.status === 'paused') {
+          statusIcon = '⏸️';
+          metaBadge = `Tạm dừng (${m.progress_pct || 0}%)`;
+          colorCls = 'bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100';
         } else if (m.status === 'stopped') {
           statusIcon = '⏹️';
           metaBadge = 'Đã dừng';
@@ -1739,11 +1820,18 @@
         statusText.innerText = proj.progress_message || 'Đang tự động tìm video đúng mốc năm & lọc khuôn mặt AI...';
         progressBarWrap.classList.remove('hidden');
         progressBarFill.style.width = `${proj.progress_pct || 5}%`;
+      } else if (proj.status === 'paused') {
+        progressBarWrap.classList.add('hidden');
+        if (!currentBatch || currentBatch.status !== 'running') setRunningButtonsState(false);
+        statusBadge.className = 'px-2.5 py-1 rounded-full bg-amber-100 text-amber-900 border border-amber-300 font-semibold';
+        statusBadge.innerText = `⏸️ Đang tạm dừng (${readyClips}/${totalClips} đoạn đã xong)`;
+        statusText.innerHTML = (proj.progress_message || 'Tác vụ đang tạm dừng.') + ' Bấm <strong>▶️ Tiếp tục Chạy</strong> để làm nốt các cảnh còn dở hoặc <strong>🗑️ Clear tất cả</strong> để làm mới.';
       } else if (proj.status === 'stopped') {
         progressBarWrap.classList.add('hidden');
+        if (!currentBatch || currentBatch.status !== 'running') setRunningButtonsState(false);
         statusBadge.className = 'px-2.5 py-1 rounded-full bg-rose-100 text-rose-800 border border-rose-300 font-semibold';
         statusBadge.innerText = `⏹️ Đã dừng chạy (${readyClips}/${totalClips} đoạn)`;
-        statusText.innerHTML = 'Đã dừng theo yêu cầu của bạn. Các đoạn đã cắt xong vẫn được giữ nguyên (Bạn có thể bấm <strong>🚀 2. Tạo Video</strong> để chạy lại hoặc <strong>💾 3. Xuất Video</strong>).';
+        statusText.innerHTML = 'Đã dừng theo yêu cầu của bạn. Các đoạn đã cắt xong vẫn được giữ nguyên (Bấm <strong>▶️ Tiếp tục Chạy</strong> để làm nốt hoặc <strong>💾 3. Xuất Video</strong>).';
       } else if (proj.status === 'queued') {
         progressBarWrap.classList.add('hidden');
         statusBadge.className = 'px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-300 font-semibold';
@@ -1802,6 +1890,8 @@
 
       if (currentBatch) {
         renderBatchSwitcher(currentBatch);
+      } else {
+        updateResumeButtonVisibility(proj, null);
       }
     }
 
@@ -2579,6 +2669,14 @@
         currentProjectId = saved.currentProjectId || null;
         currentBatchId = saved.currentBatchId || null;
         currentBatch = saved.currentBatch || null;
+        if (currentBatch && currentBatch.status === 'running') {
+          currentBatch.status = 'paused';
+          if (Array.isArray(currentBatch.items)) {
+            currentBatch.items.forEach(it => {
+              if (it.status === 'running' || it.status === 'queued') it.status = 'paused';
+            });
+          }
+        }
         if (saved.outputFolder) {
           document.getElementById('outputFolderInput').value = saved.outputFolder;
         }

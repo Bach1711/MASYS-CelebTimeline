@@ -78,7 +78,7 @@ def main():
 
         threading.Thread(target=_open_ui, daemon=True).start()
 
-    uvicorn.run(app_mod.app, host="127.0.0.1", port=8765, log_level="info")
+    uvicorn.run(app_mod.app, host="127.0.0.1", port=8765, log_level="warning", access_log=False, use_colors=False)
 
 
 if __name__ == "__main__":

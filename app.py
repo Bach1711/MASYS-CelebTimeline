@@ -78,6 +78,8 @@ async def global_unhandled_exception_handler(request: Request, exc: Exception):
 
 PROJECTS: Dict[str, Dict[str, Any]] = {}
 BATCHES: Dict[str, Dict[str, Any]] = {}
+ACTIVE_RUNNING_PIDS: Set[str] = set()
+ACTIVE_RUNNING_BATCH_IDS: Set[str] = set()
 PROJECTS_LOCK = threading.Lock()
 SAVE_FILE_LOCK = threading.RLock()
 BATCHES_FILE = os.path.join(WORKSPACE_DIR, "_batches_state.json")
@@ -90,19 +92,70 @@ def _project_dir(project_id: str) -> str:
     return p
 
 
+def _sanitize_stale_project_locked(proj: Dict[str, Any]) -> bool:
+    """
+    If a project on disk has `status in ('running', 'queued')` from a previous app session
+    (i.e. its `project_id` is NOT in `ACTIVE_RUNNING_PIDS` and no batch is currently active in RAM),
+    automatically convert it to `'paused'` so reopening the app NEVER auto-runs or spams polling logs,
+    while preserving 100% of already-cut clips so the user can click '▶️ Tiếp tục Chạy'.
+    """
+    if not isinstance(proj, dict):
+        return False
+    pid = proj.get("project_id")
+    if pid in ACTIVE_RUNNING_PIDS or ACTIVE_RUNNING_BATCH_IDS:
+        return False
+
+    changed = False
+    st = proj.get("status")
+    for yc in proj.get("year_clips", []):
+        if isinstance(yc, dict) and yc.get("status") == "processing":
+            yc["status"] = "pending"
+            yc["title"] = f"Chờ tiếp tục xử lý năm {yc.get('year')}..."
+            changed = True
+
+    if st in ("running", "queued"):
+        ready_news = 1 if (proj.get("news_clip") or {}).get("status") == "ready" else 0
+        ready_yrs = sum(1 for yc in proj.get("year_clips", []) if isinstance(yc, dict) and yc.get("status") == "ready")
+        ready_total = ready_news + ready_yrs
+        total_slots = (1 if (proj.get("news_clip") or {}).get("status") != "cleared" else 0) + len(proj.get("year_clips", []))
+        if ready_total > 0 and ready_yrs == len(proj.get("year_clips", [])) and ready_news == (1 if (proj.get("news_clip") or {}).get("status") != "cleared" else 0):
+            proj["status"] = "ready_for_preview"
+            proj["progress_pct"] = 100
+            proj["progress_message"] = f"Đã cắt xong {ready_total} đoạn"
+        else:
+            proj["status"] = "paused"
+            proj["progress_message"] = (
+                f"⏸️ Tác vụ phiên trước đang tạm dừng (Đã xong {ready_total}/{total_slots} đoạn) — Bấm '▶️ Tiếp tục Chạy' để làm nốt phần còn dở."
+            )
+        changed = True
+    return changed
+
+
 def _ensure_project_loaded(project_id: Optional[str]) -> Optional[Dict[str, Any]]:
     if not project_id:
         return None
+    need_save = False
     with PROJECTS_LOCK:
         if project_id in PROJECTS:
-            return PROJECTS[project_id]
+            proj = PROJECTS[project_id]
+            if _sanitize_stale_project_locked(proj):
+                need_save = True
+            if not need_save:
+                return proj
+    if need_save:
+        _save_project_state(project_id)
+        return PROJECTS.get(project_id)
+
     json_p = os.path.join(WORKSPACE_DIR, project_id, "project.json")
     if os.path.exists(json_p):
         try:
             with open(json_p, "r", encoding="utf-8") as f:
                 proj = json.load(f)
             with PROJECTS_LOCK:
+                need_save = _sanitize_stale_project_locked(proj)
                 PROJECTS[project_id] = proj
+            if need_save:
+                _save_project_state(project_id)
             return proj
         except Exception:
             return None
@@ -134,16 +187,28 @@ def _save_batches_state():
 def _load_batches_state():
     if not os.path.exists(BATCHES_FILE):
         return
+    changed_any = False
     try:
         with open(BATCHES_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, dict):
             with PROJECTS_LOCK:
                 for k, v in data.items():
+                    if not isinstance(v, dict):
+                        continue
+                    if k not in ACTIVE_RUNNING_BATCH_IDS and v.get("status") == "running":
+                        v["status"] = "paused"
+                        for it in v.get("items", []):
+                            if isinstance(it, dict) and it.get("status") in ("running", "queued"):
+                                it["status"] = "paused"
+                                it["progress_message"] = "⏸️ Đang tạm dừng — Bấm '▶️ Tiếp tục Chạy' để làm nốt"
+                        changed_any = True
                     if k not in BATCHES:
                         BATCHES[k] = v
     except Exception:
         pass
+    if changed_any:
+        _save_batches_state()
 
 
 _load_batches_state()
@@ -266,6 +331,7 @@ class StartBatchRequest(BaseModel):
     news_duration: float = 11.5
     year_clip_duration: float = 4.2
     auto_render: bool = False
+    resume_unfinished: bool = False
 
 
 class SwapNewsRequest(BaseModel):
@@ -371,10 +437,14 @@ def api_mkdir(req: MkdirRequest):
 
 @app.get("/api/projects-latest")
 def api_get_latest_project():
+    latest_id = None
     with PROJECTS_LOCK:
         if PROJECTS:
             latest_id = max(PROJECTS.keys(), key=lambda k: PROJECTS[k].get("created_at", 0))
-            return _serialize_project(PROJECTS[latest_id])
+    if latest_id:
+        p_loaded = _ensure_project_loaded(latest_id)
+        if p_loaded:
+            return _serialize_project(p_loaded)
     if os.path.exists(WORKSPACE_DIR):
         candidates = []
         for d in os.listdir(WORKSPACE_DIR):
@@ -383,15 +453,10 @@ def api_get_latest_project():
                 candidates.append((os.path.getmtime(jp), d, jp))
         if candidates:
             candidates.sort(reverse=True)
-            _, pid, jp = candidates[0]
-            try:
-                with open(jp, "r", encoding="utf-8") as f:
-                    proj = json.load(f)
-                with PROJECTS_LOCK:
-                    PROJECTS[pid] = proj
-                return _serialize_project(proj)
-            except Exception:
-                pass
+            _, pid, _ = candidates[0]
+            p_loaded = _ensure_project_loaded(pid)
+            if p_loaded:
+                return _serialize_project(p_loaded)
     return {"project_id": None}
 
 
@@ -809,23 +874,32 @@ def api_start_batch(req: StartBatchRequest):
     batch_id = req.batch_id or f"batch_{int(time.time())}_{uuid.uuid4().hex[:4]}"
     max_keep = max(25, len(entry_list) + 8)
 
-    # Check if some items are already cut (ready_for_preview/completed) while others are new/scanned
+    # Check if some items are already cut (ready_for_preview/completed) while others are new/scanned/paused
     already_cut_flags = []
     for entry in entry_list:
         p_loaded = _ensure_project_loaded(entry.project_id)
-        is_cut = bool(
-            p_loaded
-            and p_loaded.get("status") in ("ready_for_preview", "completed")
-            and any(yc.get("status") == "ready" for yc in p_loaded.get("year_clips", []))
-        )
-        already_cut_flags.append(is_cut)
-    # Reuse already-cut projects if at least one row is NOT cut yet (e.g. user replaced Row #8 and clicked Tạo Video)
-    preserve_already_cut = any(already_cut_flags) and not all(already_cut_flags)
+        ycs = (p_loaded or {}).get("year_clips", [])
+        has_pending_or_err = any(yc.get("status") in ("pending", "processing", "error") for yc in ycs)
+        has_exported_mp4 = bool((p_loaded or {}).get("final_video", {}).get("output_path") and os.path.exists((p_loaded or {}).get("final_video", {}).get("output_path", "")))
+        if req.auto_render:
+            is_done = bool(p_loaded and p_loaded.get("status") == "completed" and has_exported_mp4 and not has_pending_or_err)
+        else:
+            is_done = bool(
+                p_loaded
+                and p_loaded.get("status") in ("ready_for_preview", "completed")
+                and any(yc.get("status") == "ready" for yc in ycs)
+                and not has_pending_or_err
+            )
+        already_cut_flags.append(is_done)
+
+    # Reuse already-completed projects if resuming or if at least one row is NOT done yet
+    preserve_already_cut = bool(req.resume_unfinished) or (any(already_cut_flags) and not all(already_cut_flags))
 
     batch_items = []
     first_proj = None
     running_assigned_count = 0
     BATCH_MAX_PARALLEL_CELEBS = 3
+    pids_to_mark_active: List[str] = []
 
     # Pre-create (or reuse scanned/cut) project records for ALL items upfront so every tab is immediately clickable without any popup!
     for idx, entry in enumerate(entry_list):
@@ -852,7 +926,7 @@ def api_start_batch(req: StartBatchRequest):
                     "project_id": pid,
                     "status": item_status,
                     "progress_pct": 100,
-                    "progress_message": "Đã cắt xong trước đó",
+                    "progress_message": "Đã hoàn tất trước đó",
                     "total_duration": float(fv.get("total_duration") or 0.0),
                     "output_path": fv.get("output_path") or "",
                     "error": None,
@@ -868,14 +942,22 @@ def api_start_batch(req: StartBatchRequest):
             with PROJECTS_LOCK:
                 p = PROJECTS[pid]
                 p["output_folder"] = output_folder
+                p["auto_render"] = bool(req.auto_render)
                 p["status"] = "running" if start_immediately else "queued"
-                p["progress_pct"] = 5 if start_immediately else 0
+                if not req.resume_unfinished:
+                    p["progress_pct"] = 5 if start_immediately else 0
+                else:
+                    p["progress_pct"] = max(5, int(p.get("progress_pct") or 5)) if start_immediately else int(p.get("progress_pct") or 0)
                 p["progress_message"] = (
-                    "⚡ Đa luồng: Đang bắt đầu tìm & cắt video..."
-                    if start_immediately
-                    else "Đang chờ luồng trống..."
+                    "⚡ Đa luồng: Đang tiếp tục xử lý phần còn dở..."
+                    if (req.resume_unfinished and start_immediately)
+                    else (
+                        "⚡ Đa luồng: Đang bắt đầu tìm & cắt video..."
+                        if start_immediately
+                        else "Đang chờ luồng trống..."
+                    )
                 )
-                if entry.years:
+                if entry.years and not req.resume_unfinished:
                     p["years"] = sorted(entry.years)
             _save_project_state(pid)
         else:
@@ -886,7 +968,7 @@ def api_start_batch(req: StartBatchRequest):
                 output_folder=output_folder,
                 news_duration=req.news_duration,
                 year_clip_duration=req.year_clip_duration,
-                auto_render=False,
+                auto_render=bool(req.auto_render),
             )
             pid = _create_project_record(
                 p_req,
@@ -895,9 +977,11 @@ def api_start_batch(req: StartBatchRequest):
                 run_cleanup=False,
             )
 
+        pids_to_mark_active.append(pid)
         with PROJECTS_LOCK:
             p_obj = PROJECTS[pid]
             disp_name = p_obj.get("celeb_info", {}).get("name") or entry.name.strip()
+            cur_pct = int(p_obj.get("progress_pct") or (5 if start_immediately else 0))
             if idx == 0:
                 first_proj = _serialize_project(p_obj)
 
@@ -910,11 +994,15 @@ def api_start_batch(req: StartBatchRequest):
                 "wiki_title": wiki_t or disp_name,
                 "project_id": pid,
                 "status": "running" if start_immediately else "queued",
-                "progress_pct": 5 if start_immediately else 0,
+                "progress_pct": cur_pct,
                 "progress_message": (
-                    "⚡ Đa luồng: Đang bắt đầu tìm & cắt video..."
-                    if start_immediately
-                    else "Đang chờ luồng trống..."
+                    "⚡ Đa luồng: Đang tiếp tục xử lý phần còn dở..."
+                    if (req.resume_unfinished and start_immediately)
+                    else (
+                        "⚡ Đa luồng: Đang bắt đầu tìm & cắt video..."
+                        if start_immediately
+                        else "Đang chờ luồng trống..."
+                    )
                 ),
                 "total_duration": 0.0,
                 "output_path": "",
@@ -927,6 +1015,7 @@ def api_start_batch(req: StartBatchRequest):
         "batch_id": batch_id,
         "created_at": time.time(),
         "status": "running",
+        "auto_render": bool(req.auto_render),
         "output_folder": output_folder,
         "news_duration": req.news_duration,
         "year_clip_duration": req.year_clip_duration,
@@ -938,6 +1027,9 @@ def api_start_batch(req: StartBatchRequest):
     }
 
     with PROJECTS_LOCK:
+        ACTIVE_RUNNING_BATCH_IDS.add(batch_id)
+        for a_pid in pids_to_mark_active:
+            ACTIVE_RUNNING_PIDS.add(a_pid)
         BATCHES[batch_id] = batch_state
     _save_batches_state()
 
@@ -966,6 +1058,8 @@ def _sync_batch_items(batch_id: str) -> Optional[Dict[str, Any]]:
         b = BATCHES.get(batch_id)
         if not b:
             return None
+        if batch_id not in ACTIVE_RUNNING_BATCH_IDS and b.get("status") == "running":
+            b["status"] = "paused"
         for item in b.get("items", []):
             pid = item.get("project_id")
             if pid and pid in PROJECTS:
@@ -987,7 +1081,11 @@ def _sync_batch_items(batch_id: str) -> Optional[Dict[str, Any]]:
                         item["status"] = "completed"
                 elif p.get("status") == "running":
                     item["status"] = "running"
+                elif p.get("status") == "paused":
+                    item["total_duration"] = cut_dur
+                    item["status"] = "paused"
                 elif p.get("status") == "stopped":
+                    item["total_duration"] = cut_dur
                     item["status"] = "stopped"
                 elif p.get("status") == "ready_for_preview":
                     item["total_duration"] = cut_dur
@@ -1010,24 +1108,31 @@ def _run_batch_worker(batch_id: str, max_keep: int = 25):
     Execute multiple celebrity Tabs concurrently in parallel (`max_workers = 3`),
     so when a user runs 3 celebrities (e.g. Amy Winehouse, Michael Jackson, Fred Rogers),
     ALL 3 Tabs run simultaneously instead of waiting one by one!
+    Supports `auto_render=True` for the 1-Click Full-Auto A-Z Trigger.
     """
     with PROJECTS_LOCK:
         b = BATCHES.get(batch_id)
         if not b:
+            ACTIVE_RUNNING_BATCH_IDS.discard(batch_id)
             return
+        batch_auto_render = bool(b.get("auto_render", False))
         pids_ordered = [(it.get("project_id"), bool(it.get("skip_worker"))) for it in b["items"]]
 
     runnable_pids = [pid for pid, skip_flag in pids_ordered if pid and not skip_flag]
 
     def _run_single_celeb_in_batch(pid: str):
         if is_pipeline_cancelled():
+            with PROJECTS_LOCK:
+                ACTIVE_RUNNING_PIDS.discard(pid)
             return
         with PROJECTS_LOCK:
             b = BATCHES.get(batch_id)
             if not b or b.get("status") == "stopped":
+                ACTIVE_RUNNING_PIDS.discard(pid)
                 return
             matching_indices = [i for i, it in enumerate(b["items"]) if it.get("project_id") == pid]
             if not matching_indices:
+                ACTIVE_RUNNING_PIDS.discard(pid)
                 return
             idx = matching_indices[0]
             b["current_index"] = idx
@@ -1043,7 +1148,7 @@ def _run_batch_worker(batch_id: str, max_keep: int = 25):
         _save_project_state(pid)
 
         try:
-            _run_full_pipeline_worker(pid, auto_render=False)
+            _run_full_pipeline_worker(pid, auto_render=batch_auto_render)
             if is_pipeline_cancelled():
                 with PROJECTS_LOCK:
                     if batch_id in BATCHES:
@@ -1057,11 +1162,17 @@ def _run_batch_worker(batch_id: str, max_keep: int = 25):
                 b = BATCHES.get(batch_id)
                 p = PROJECTS.get(pid, {})
                 ready_yc = [yc for yc in p.get("year_clips", []) if yc.get("status") == "ready"]
+                fv = p.get("final_video") or {}
                 if b:
                     for it in b["items"]:
                         if it.get("project_id") == pid:
-                            if p.get("status") == "stopped":
-                                it["status"] = "stopped"
+                            if p.get("status") in ("stopped", "paused"):
+                                it["status"] = p.get("status")
+                            elif fv.get("output_path") and os.path.exists(fv["output_path"]):
+                                it["status"] = "completed"
+                                it["progress_pct"] = 100
+                                it["output_path"] = fv["output_path"]
+                                it["total_duration"] = fv.get("total_duration", 0.0)
                             elif ready_yc:
                                 it["status"] = "ready_for_preview"
                                 it["progress_pct"] = 100
@@ -1076,22 +1187,41 @@ def _run_batch_worker(batch_id: str, max_keep: int = 25):
                         if it.get("project_id") == pid:
                             it["status"] = "stopped" if "PIPELINE_CANCELLED" in str(e) else "error"
                             it["error"] = None if "PIPELINE_CANCELLED" in str(e) else str(e)
+        finally:
+            with PROJECTS_LOCK:
+                ACTIVE_RUNNING_PIDS.discard(pid)
         _save_batches_state()
 
-    if runnable_pids:
-        celeb_workers = min(3, max(1, len(runnable_pids)))
-        with ThreadPoolExecutor(max_workers=celeb_workers) as batch_pool:
-            futs = [batch_pool.submit(_run_single_celeb_in_batch, pid) for pid in runnable_pids]
-            for fut in as_completed(futs):
-                try:
-                    fut.result()
-                except Exception:
-                    pass
+    try:
+        if runnable_pids:
+            celeb_workers = min(3, max(1, len(runnable_pids)))
+            with ThreadPoolExecutor(max_workers=celeb_workers) as batch_pool:
+                futs = [batch_pool.submit(_run_single_celeb_in_batch, pid) for pid in runnable_pids]
+                for fut in as_completed(futs):
+                    try:
+                        fut.result()
+                    except Exception:
+                        pass
 
-    with PROJECTS_LOCK:
-        if batch_id in BATCHES and BATCHES[batch_id].get("status") != "stopped":
-            BATCHES[batch_id]["status"] = "ready_for_preview"
-    _save_batches_state()
+        with PROJECTS_LOCK:
+            if batch_id in BATCHES and BATCHES[batch_id].get("status") != "stopped":
+                b_obj = BATCHES[batch_id]
+                has_paused = any(it.get("status") == "paused" for it in b_obj.get("items", []))
+                all_exported = bool(b_obj.get("items")) and all(
+                    it.get("status") == "completed" or it.get("output_path") for it in b_obj.get("items", [])
+                )
+                if has_paused:
+                    b_obj["status"] = "paused"
+                elif all_exported:
+                    b_obj["status"] = "completed"
+                else:
+                    b_obj["status"] = "ready_for_preview"
+    finally:
+        with PROJECTS_LOCK:
+            ACTIVE_RUNNING_BATCH_IDS.discard(batch_id)
+            for pid in runnable_pids:
+                ACTIVE_RUNNING_PIDS.discard(pid)
+        _save_batches_state()
 
 
 class RemoveBatchRowRequest(BaseModel):
@@ -1214,6 +1344,16 @@ def _compute_year_window(years: List[int], idx: int) -> tuple:
 
 
 def _run_full_pipeline_worker(project_id: str, auto_render: bool = False):
+    with PROJECTS_LOCK:
+        ACTIVE_RUNNING_PIDS.add(project_id)
+    try:
+        _run_full_pipeline_worker_impl(project_id, auto_render=auto_render)
+    finally:
+        with PROJECTS_LOCK:
+            ACTIVE_RUNNING_PIDS.discard(project_id)
+
+
+def _run_full_pipeline_worker_impl(project_id: str, auto_render: bool = False):
     if is_pipeline_cancelled():
         with PROJECTS_LOCK:
             if project_id in PROJECTS:
@@ -1229,69 +1369,99 @@ def _run_full_pipeline_worker(project_id: str, auto_render: bool = False):
         death_year = int(proj["celeb_info"].get("death_year") or 2026)
         ref_imgs = proj["celeb_info"].get("reference_images", [])
         extra_forbidden = proj["celeb_info"].get("youtube_forbidden_terms", [])
+        notable_years_init = list(proj["celeb_info"].get("notable_years") or [])
         years = list(proj["years"])
         news_dur = float(proj["news_duration"])
         year_dur = float(proj["year_clip_duration"])
         min_dur = float(proj.get("min_clip_duration", 3.6))
         max_dur = float(proj.get("max_clip_duration", 5.4))
         custom_news_url = proj.get("custom_news_url")
+        existing_news = dict(proj.get("news_clip") or {})
+        existing_year_clips = list(proj.get("year_clips") or [])
 
     ref_embeddings = face_engine.extract_reference_embeddings(ref_imgs)
     used_video_ids: Set[str] = set()
     used_years: Set[int] = set()
     tried_years: Set[int] = set()
 
-    # Step 1: Find & cut News Intro clip (8-15s with original anchor audio)
-    actual_news_dur = news_dur
-    try:
-        if is_pipeline_cancelled():
-            raise RuntimeError("PIPELINE_CANCELLED")
-        with PROJECTS_LOCK:
-            PROJECTS[project_id]["progress_pct"] = 8
-            PROJECTS[project_id]["progress_message"] = (
-                f"Đang tìm bản tin thông báo về {celeb_name} & dò phụ đề cắt câu dẫn (8–15s)..."
-            )
-        news_clip = find_and_prepare_news_clip(
-            celeb_name=celeb_name,
-            project_dir=pdir,
-            target_duration=news_dur,
-            custom_url=custom_news_url,
-            candidate_index=0,
-        )
-        news_clip["status"] = "ready"
-        actual_news_dur = float(news_clip.get("duration_sec") or news_dur)
-        if news_clip.get("video_id"):
-            used_video_ids.add(news_clip["video_id"])
-        with PROJECTS_LOCK:
-            PROJECTS[project_id]["news_clip"] = news_clip
-        _save_project_state(project_id)
-    except Exception as e:
-        if "PIPELINE_CANCELLED" in str(e) or is_pipeline_cancelled():
-            with PROJECTS_LOCK:
-                PROJECTS[project_id]["status"] = "stopped"
-            _save_project_state(project_id)
-            return
-        with PROJECTS_LOCK:
-            PROJECTS[project_id]["news_clip"] = {
-                "status": "error",
-                "error": str(e),
-                "title": "Không tự động lấy được bản tin (Bấm Chỉnh giây / Dán link để thử nguồn khác)",
-                "duration_sec": news_dur,
-            }
-        _save_project_state(project_id)
+    # Preserve already-ready year clips when resuming an unfinished project!
+    has_existing_ready_years = False
+    for yc in existing_year_clips:
+        if isinstance(yc, dict) and yc.get("status") == "ready" and yc.get("clip_path") and os.path.exists(yc["clip_path"]):
+            has_existing_ready_years = True
+            if yc.get("video_id"):
+                used_video_ids.add(yc["video_id"])
+            if yc.get("year"):
+                used_years.add(int(yc["year"]))
+                tried_years.add(int(yc["year"]))
 
-    # Step 1.5: YouTube-First Year Discovery — Scan real YouTube videos of the celebrity to discover
-    # which years actually have footage (and assign true upload_year for undated clips of minor celebrities)!
+    # Step 1: Find & cut News Intro clip (or reuse if already ready/cleared from previous partial run!)
+    actual_news_dur = news_dur
+    news_already_done = (
+        existing_news.get("status") == "cleared"
+        or (
+            existing_news.get("status") == "ready"
+            and existing_news.get("clip_path")
+            and os.path.exists(existing_news["clip_path"])
+        )
+    )
+    if news_already_done:
+        if existing_news.get("status") == "cleared":
+            actual_news_dur = 0.0
+        else:
+            actual_news_dur = float(existing_news.get("duration_sec") or news_dur)
+            if existing_news.get("video_id"):
+                used_video_ids.add(existing_news["video_id"])
+    else:
+        try:
+            if is_pipeline_cancelled():
+                raise RuntimeError("PIPELINE_CANCELLED")
+            with PROJECTS_LOCK:
+                PROJECTS[project_id]["progress_pct"] = 8
+                PROJECTS[project_id]["progress_message"] = (
+                    f"Đang tìm bản tin thông báo về {celeb_name} & dò phụ đề cắt câu dẫn (8–15s)..."
+                )
+            news_clip = find_and_prepare_news_clip(
+                celeb_name=celeb_name,
+                project_dir=pdir,
+                target_duration=news_dur,
+                custom_url=custom_news_url,
+                candidate_index=0,
+            )
+            news_clip["status"] = "ready"
+            actual_news_dur = float(news_clip.get("duration_sec") or news_dur)
+            if news_clip.get("video_id"):
+                used_video_ids.add(news_clip["video_id"])
+            with PROJECTS_LOCK:
+                PROJECTS[project_id]["news_clip"] = news_clip
+            _save_project_state(project_id)
+        except Exception as e:
+            if "PIPELINE_CANCELLED" in str(e) or is_pipeline_cancelled():
+                with PROJECTS_LOCK:
+                    PROJECTS[project_id]["status"] = "stopped"
+                _save_project_state(project_id)
+                return
+            with PROJECTS_LOCK:
+                PROJECTS[project_id]["news_clip"] = {
+                    "status": "error",
+                    "error": str(e),
+                    "title": "Không tự động lấy được bản tin (Bấm Chỉnh giây / Dán link để thử nguồn khác)",
+                    "duration_sec": news_dur,
+                }
+            _save_project_state(project_id)
+
+    # Step 1.5: YouTube-First Year Discovery — Scan real YouTube videos of the celebrity
     dated_pool: Dict[int, List[Dict[str, Any]]] = {}
     try:
         if is_pipeline_cancelled():
             raise RuntimeError("PIPELINE_CANCELLED")
-        with PROJECTS_LOCK:
-            PROJECTS[project_id]["progress_pct"] = 14
-            PROJECTS[project_id]["progress_message"] = (
-                f"Đang quét kho video thực tế của {celeb_name} trên YouTube để lấy các mốc năm có tư liệu thật..."
-            )
-        _save_project_state(project_id)
+        if not has_existing_ready_years:
+            with PROJECTS_LOCK:
+                PROJECTS[project_id]["progress_pct"] = 14
+                PROJECTS[project_id]["progress_message"] = (
+                    f"Đang quét kho video thực tế của {celeb_name} trên YouTube để lấy các mốc năm có tư liệu thật..."
+                )
+            _save_project_state(project_id)
 
         discovered_years, dated_pool = discover_celebrity_youtube_pool(
             celeb_name=celeb_name,
@@ -1300,7 +1470,7 @@ def _run_full_pipeline_worker(project_id: str, auto_render: bool = False):
             requested_years=years,
             extra_forbidden_terms=extra_forbidden,
         )
-        if discovered_years and len(discovered_years) >= 3:
+        if not has_existing_ready_years and discovered_years and len(discovered_years) >= 3:
             years = list(discovered_years)
             if len(years) <= 7:
                 year_dur = max(year_dur, 4.8)
@@ -1329,7 +1499,21 @@ def _run_full_pipeline_worker(project_id: str, auto_render: bool = False):
 
     tried_years.update(years)
 
-    # Step 2: Process Year clips in PARALLEL (3 concurrent threads) with atomic video claiming & thread-local FaceEngine
+    # Build backup replacement years queue so if any year slot fails or times out after checking all avenues,
+    # the worker thread immediately switches to an alternative year with real footage!
+    backup_years_pool: List[int] = []
+    for py in sorted(dated_pool.keys()):
+        if int(py) not in tried_years and int(py) not in backup_years_pool:
+            backup_years_pool.append(int(py))
+    for ny in notable_years_init:
+        if int(ny) not in tried_years and int(ny) not in backup_years_pool:
+            backup_years_pool.append(int(ny))
+    for gy in range(max(1955, birth_year + 18), min(2026, death_year) + 1, 3):
+        if int(gy) not in tried_years and int(gy) not in backup_years_pool:
+            backup_years_pool.append(int(gy))
+
+    # Step 2: Process Year clips in PARALLEL (3 concurrent threads) with atomic video claiming,
+    # automatic fallback to alternative year on failure/timeout, and 3-minute watchdog auto-pause!
     total_years = max(1, len(years))
     year_Counts_seen: Dict[int, int] = {}
     planned_year_tasks: List[Tuple[int, int, Tuple[int, int], int]] = []
@@ -1343,9 +1527,20 @@ def _run_full_pipeline_worker(project_id: str, auto_render: bool = False):
     emb_lock = threading.Lock()
     completed_slots_count = 0
     all_planned_years_set = {int(y) for y in years}
+    last_activity_ts = time.time()
+
+    def _pop_next_replacement_year() -> Optional[int]:
+        with claim_lock:
+            while backup_years_pool:
+                cand_y = backup_years_pool.pop(0)
+                if cand_y not in used_years and cand_y not in tried_years and cand_y not in all_planned_years_set:
+                    tried_years.add(cand_y)
+                    all_planned_years_set.add(cand_y)
+                    return cand_y
+        return None
 
     def _process_year_slot(task_tuple: Tuple[int, int, Tuple[int, int], int]):
-        nonlocal completed_slots_count
+        nonlocal completed_slots_count, last_activity_ts
         i, yr, win, sc_idx = task_tuple
         if is_pipeline_cancelled():
             return
@@ -1353,8 +1548,13 @@ def _run_full_pipeline_worker(project_id: str, auto_render: bool = False):
         with PROJECTS_LOCK:
             if i < len(PROJECTS[project_id]["year_clips"]):
                 existing_slot = PROJECTS[project_id]["year_clips"][i]
-                if existing_slot.get("user_modified"):
+                if existing_slot.get("user_modified") or (
+                    existing_slot.get("status") == "ready"
+                    and existing_slot.get("clip_path")
+                    and os.path.exists(existing_slot["clip_path"])
+                ):
                     completed_slots_count += 1
+                    last_activity_ts = time.time()
                     return
                 PROJECTS[project_id]["year_clips"][i]["status"] = "processing"
                 PROJECTS[project_id]["year_clips"][i]["title"] = f"⚡ Đang tải & lọc mặt AI năm {yr}..."
@@ -1369,31 +1569,67 @@ def _run_full_pipeline_worker(project_id: str, auto_render: bool = False):
             )
         _save_project_state(project_id)
 
-        with claim_lock:
-            slot_forbidden = ((used_years | all_planned_years_set) - {int(yr)}) if sc_idx == 1 else None
-        with emb_lock:
-            ref_embs_snapshot = list(ref_embeddings)
+        years_to_attempt: List[Tuple[int, Tuple[int, int]]] = [(yr, win)]
+        last_err_msg = f"Không tìm được clip năm {yr}"
+        y_clip: Optional[Dict[str, Any]] = None
 
-        try:
-            y_clip = find_and_prepare_year_clip(
-                celeb_name=celeb_name,
-                year=yr,
-                project_dir=pdir,
-                face_engine=face_engine,
-                ref_embeddings=ref_embs_snapshot,
-                clip_duration=year_dur,
-                min_clip_duration=min_dur,
-                max_clip_duration=max_dur,
-                candidate_index=sc_idx - 1,
-                segment_index=0,
-                year_window=win,
-                used_video_ids=used_video_ids,
-                forbidden_years=slot_forbidden,
-                extra_forbidden_terms=extra_forbidden,
-                pre_discovered_candidates=dated_pool.get(yr),
-                scene_index=sc_idx,
-                claim_lock=claim_lock,
-            )
+        attempt_idx = 0
+        while attempt_idx < len(years_to_attempt):
+            if is_pipeline_cancelled():
+                return
+            try_yr, try_win = years_to_attempt[attempt_idx]
+            attempt_idx += 1
+
+            if attempt_idx > 1:
+                with PROJECTS_LOCK:
+                    if i < len(PROJECTS[project_id]["year_clips"]) and not PROJECTS[project_id]["year_clips"][i].get("user_modified"):
+                        PROJECTS[project_id]["year_clips"][i]["year"] = try_yr
+                        PROJECTS[project_id]["year_clips"][i]["status"] = "processing"
+                        PROJECTS[project_id]["year_clips"][i]["title"] = (
+                            f"🔄 Năm {yr} không có cảnh — đang tự động chuyển sang tìm năm {try_yr}..."
+                        )
+                _save_project_state(project_id)
+
+            with claim_lock:
+                slot_forbidden = ((used_years | all_planned_years_set) - {int(try_yr)}) if sc_idx == 1 else None
+            with emb_lock:
+                ref_embs_snapshot = list(ref_embeddings)
+
+            try:
+                y_clip = find_and_prepare_year_clip(
+                    celeb_name=celeb_name,
+                    year=try_yr,
+                    project_dir=pdir,
+                    face_engine=face_engine,
+                    ref_embeddings=ref_embs_snapshot,
+                    clip_duration=year_dur,
+                    min_clip_duration=min_dur,
+                    max_clip_duration=max_dur,
+                    candidate_index=(sc_idx - 1) if attempt_idx == 1 else 0,
+                    segment_index=0,
+                    year_window=try_win,
+                    used_video_ids=used_video_ids,
+                    forbidden_years=slot_forbidden,
+                    extra_forbidden_terms=extra_forbidden,
+                    pre_discovered_candidates=dated_pool.get(try_yr),
+                    scene_index=sc_idx,
+                    claim_lock=claim_lock,
+                    max_slot_seconds=75.0 if attempt_idx == 1 else 55.0,
+                )
+                break
+            except Exception as e:
+                if "PIPELINE_CANCELLED" in str(e) or is_pipeline_cancelled():
+                    return
+                last_err_msg = str(e)
+                y_clip = None
+                # Automatically switch to an alternative year if this year has no valid clip or timed out (up to 2 fallback years)
+                if len(years_to_attempt) < 3:
+                    alt_yr = _pop_next_replacement_year()
+                    if alt_yr is not None:
+                        years_to_attempt.append((alt_yr, (alt_yr - 1, alt_yr + 1)))
+
+        last_activity_ts = time.time()
+        if y_clip is not None:
             y_clip["status"] = "ready"
             with claim_lock:
                 if y_clip.get("video_id"):
@@ -1421,9 +1657,7 @@ def _run_full_pipeline_worker(project_id: str, auto_render: bool = False):
                 PROJECTS[project_id]["progress_message"] = (
                     f"⚡ Đa luồng (3 luồng): Đã cắt xong năm {y_clip['year']} ({completed_slots_count}/{total_years} mốc năm)..."
                 )
-        except Exception as e:
-            if "PIPELINE_CANCELLED" in str(e) or is_pipeline_cancelled():
-                return
+        else:
             with PROJECTS_LOCK:
                 completed_slots_count += 1
                 pct = 18 + int((completed_slots_count / total_years) * 65)
@@ -1435,20 +1669,54 @@ def _run_full_pipeline_worker(project_id: str, auto_render: bool = False):
                         "requested_year": yr,
                         "scene_index": sc_idx,
                         "status": "error",
-                        "error": str(e),
-                        "title": f"Không tìm được clip năm {yr}",
+                        "error": last_err_msg,
+                        "title": f"Không tìm được clip năm {yr} (đã thử đổi năm dự phòng)",
                         "duration_sec": year_dur,
                     }
         _save_project_state(project_id)
 
     year_workers = min(3, max(1, len(planned_year_tasks)))
-    with ThreadPoolExecutor(max_workers=year_workers) as year_pool:
-        year_futures = [year_pool.submit(_process_year_slot, t) for t in planned_year_tasks]
-        for fut in as_completed(year_futures):
-            try:
-                fut.result()
-            except Exception:
-                pass
+    year_pool = ThreadPoolExecutor(max_workers=year_workers)
+    was_watchdog_paused = False
+    try:
+        pending_futs = set(year_pool.submit(_process_year_slot, t) for t in planned_year_tasks)
+        while pending_futs:
+            if is_pipeline_cancelled():
+                break
+            done_now = {f for f in pending_futs if f.done()}
+            if done_now:
+                last_activity_ts = time.time()
+                for df in done_now:
+                    pending_futs.discard(df)
+                    try:
+                        df.result()
+                    except Exception:
+                        pass
+                continue
+            # Watchdog: If all active worker threads are frozen with zero progress for 180s (3 min), auto-pause & report!
+            if time.time() - last_activity_ts > 180.0:
+                was_watchdog_paused = True
+                break
+            time.sleep(1.0)
+    finally:
+        year_pool.shutdown(wait=not was_watchdog_paused, cancel_futures=True)
+
+    if was_watchdog_paused and not is_pipeline_cancelled():
+        with PROJECTS_LOCK:
+            for yc in PROJECTS[project_id].get("year_clips", []):
+                if isinstance(yc, dict) and yc.get("status") == "processing":
+                    yc["status"] = "pending"
+                    yc["title"] = f"Tạm dừng tại năm {yc.get('year')} (Bấm Tiếp tục chạy để thử năm khác)"
+            ready_cnt = (1 if PROJECTS[project_id].get("news_clip", {}).get("status") == "ready" else 0) + len(
+                [yc for yc in PROJECTS[project_id].get("year_clips", []) if yc.get("status") == "ready"]
+            )
+            PROJECTS[project_id]["status"] = "paused"
+            PROJECTS[project_id]["error"] = "Tự động tạm dừng do quá thời gian chờ mạng/YouTube tại cảnh cuối."
+            PROJECTS[project_id]["progress_message"] = (
+                f"⚠️ Đã tạm dừng tự động do quá thời gian chờ tại cảnh cuối (Đã giữ nguyên {ready_cnt} đoạn cắt xong). Bấm '▶️ Tiếp tục Chạy' để làm nốt hoặc '💾 Xuất Video'."
+            )
+        _save_project_state(project_id)
+        return
 
     if is_pipeline_cancelled():
         with PROJECTS_LOCK:
@@ -1670,17 +1938,9 @@ def _run_full_pipeline_worker(project_id: str, auto_render: bool = False):
 
 @app.get("/api/projects/{project_id}")
 def api_get_project(project_id: str):
-    with PROJECTS_LOCK:
-        proj = PROJECTS.get(project_id)
+    proj = _ensure_project_loaded(project_id)
     if not proj:
-        json_p = os.path.join(_project_dir(project_id), "project.json")
-        if os.path.exists(json_p):
-            with open(json_p, "r", encoding="utf-8") as f:
-                proj = json.load(f)
-            with PROJECTS_LOCK:
-                PROJECTS[project_id] = proj
-        else:
-            raise HTTPException(status_code=404, detail="Không tìm thấy dự án.")
+        raise HTTPException(status_code=404, detail="Không tìm thấy dự án.")
     return _serialize_project(proj)
 
 
@@ -2952,4 +3212,4 @@ def serve_index():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=8765)
+    uvicorn.run(app, host="127.0.0.1", port=8765, log_level="warning", access_log=False, use_colors=False)
