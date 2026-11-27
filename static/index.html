@@ -1388,6 +1388,14 @@
       await startPipeline(autoRenderMode, true);
     }
 
+    function isRowScanIncomplete(row) {
+      if (!row || !row.scanned_info) return true;
+      const si = row.scanned_info;
+      const hasPortrait = Boolean(si.portrait_url || si.local_portrait_url || (Array.isArray(si.reference_images) && si.reference_images.length > 0));
+      const isFallbackYears = Number(si.birth_year) === 1955 && Number(si.death_year) >= 2025 && !String(si.description || '').trim();
+      return !hasPortrait || isFallbackYears;
+    }
+
     async function startPipeline(autoRender = false, resumeUnfinished = false) {
       let filled = getFilledTableRows();
       const output_folder = document.getElementById('outputFolderInput').value.trim();
@@ -1400,9 +1408,15 @@
         return;
       }
 
-      // If any filled row hasn't been scanned yet, auto-scan first so typos & disambiguation are applied!
-      const hasUnscanned = filled.some(({ row }) => !row.scanned_info);
+      // If any filled row hasn't been scanned yet OR was previously corrupted (1955-2026 / blank avatar), auto-rescan first!
+      const hasUnscanned = filled.some(({ row }) => isRowScanIncomplete(row));
       if (hasUnscanned) {
+        filled.forEach(({ row }) => {
+          if (isRowScanIncomplete(row)) {
+            row.project_id = null;
+            row.years_str = '';
+          }
+        });
         const ok = await scanAllTableRows();
         if (!ok) return;
         filled = getFilledTableRows();

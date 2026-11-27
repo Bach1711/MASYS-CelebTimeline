@@ -522,6 +522,24 @@ def api_lookup(req: LookupRequest):
     return info
 
 
+def _is_celeb_info_incomplete(ci: Optional[Dict[str, Any]]) -> bool:
+    """
+    Detect whether a celebrity lookup record was corrupted by an earlier Wikipedia HTTP 429
+    or network error (e.g., 0 reference portrait files on disk, or default 1955–2026 years with empty bio).
+    """
+    if not ci or not isinstance(ci, dict):
+        return True
+    ref_imgs = [p for p in (ci.get("reference_images") or []) if p and os.path.exists(str(p))]
+    if not ref_imgs:
+        return True
+    by = int(ci.get("birth_year") or 1955)
+    dy = int(ci.get("death_year") or 2026)
+    has_bio = bool((ci.get("description") or "").strip() or (ci.get("extract") or "").strip())
+    if by == 1955 and dy >= 2025 and not has_bio:
+        return True
+    return False
+
+
 @app.post("/api/lookup-batch")
 def api_lookup_batch(req: LookupBatchRequest):
     """
@@ -546,7 +564,11 @@ def api_lookup_batch(req: LookupBatchRequest):
             ex_wiki = (ex_ci.get("wiki_title") or "").lower()
             ex_query = (ex_ci.get("input_query") or "").lower()
             req_target = (it.exact_wiki_title or it.name).strip().lower()
-            if req_target and req_target in (ex_wiki, ex_query, (ex_ci.get("name") or "").lower()):
+            if (
+                req_target
+                and req_target in (ex_wiki, ex_query, (ex_ci.get("name") or "").lower())
+                and not _is_celeb_info_incomplete(ex_ci)
+            ):
                 pid = it.existing_project_id
                 if it.years:
                     with PROJECTS_LOCK:
@@ -554,10 +576,12 @@ def api_lookup_batch(req: LookupBatchRequest):
                     _save_project_state(pid)
 
         if not pid:
+            # If previous scan was corrupted (1955-2026 / 0 reference images), ignore old auto-generated years!
+            was_corrupted = bool(existing_p and _is_celeb_info_incomplete(existing_p.get("celeb_info")))
             p_req = StartPipelineRequest(
                 name=it.name.strip(),
                 exact_wiki_title=it.exact_wiki_title,
-                years=it.years,
+                years=None if was_corrupted else it.years,
                 output_folder=output_folder,
                 auto_render=False,
             )
@@ -940,6 +964,31 @@ def api_start_batch(req: StartBatchRequest):
         running_assigned_count += 1
 
         if p_existing:
+            if _is_celeb_info_incomplete(p_existing.get("celeb_info")):
+                pdir_ex = _project_dir(pid)
+                repaired_ci = lookup_celebrity(
+                    entry.name.strip(),
+                    save_dir=os.path.join(pdir_ex, "refs"),
+                    exact_wiki_title=wiki_t,
+                )
+                with PROJECTS_LOCK:
+                    p = PROJECTS[pid]
+                    p["celeb_info"] = repaired_ci
+                    if repaired_ci.get("recommended_years") and not req.resume_unfinished:
+                        p["years"] = list(repaired_ci["recommended_years"])
+                        base_d = float(p.get("year_clip_duration") or 4.5)
+                        p["year_clips"] = [
+                            {
+                                "slot_index": s_i,
+                                "year": y_val,
+                                "requested_year": y_val,
+                                "scene_index": 1,
+                                "status": "pending",
+                                "title": f"Đang chờ xử lý năm {y_val}...",
+                                "duration_sec": base_d,
+                            }
+                            for s_i, y_val in enumerate(p["years"])
+                        ]
             with PROJECTS_LOCK:
                 p = PROJECTS[pid]
                 p["output_folder"] = output_folder
@@ -958,7 +1007,7 @@ def api_start_batch(req: StartBatchRequest):
                         else "Đang chờ luồng trống..."
                     )
                 )
-                if entry.years and not req.resume_unfinished:
+                if entry.years and not req.resume_unfinished and not _is_celeb_info_incomplete(p.get("celeb_info")):
                     p["years"] = sorted(entry.years)
             _save_project_state(pid)
         else:
@@ -1364,6 +1413,43 @@ def _run_full_pipeline_worker_impl(project_id: str, auto_render: bool = False):
         return
 
     pdir = _project_dir(project_id)
+    with PROJECTS_LOCK:
+        proj = PROJECTS[project_id]
+        needs_celeb_repair = _is_celeb_info_incomplete(proj.get("celeb_info"))
+        raw_name_for_repair = (proj.get("celeb_info") or {}).get("name") or (proj.get("celeb_info") or {}).get("input_query") or ""
+        raw_wiki_for_repair = (proj.get("celeb_info") or {}).get("wiki_title") or None
+
+    if needs_celeb_repair and raw_name_for_repair:
+        repaired_info = lookup_celebrity(
+            raw_name_for_repair,
+            save_dir=os.path.join(pdir, "refs"),
+            exact_wiki_title=raw_wiki_for_repair,
+        )
+        if not _is_celeb_info_incomplete(repaired_info):
+            with PROJECTS_LOCK:
+                proj = PROJECTS[project_id]
+                proj["celeb_info"] = repaired_info
+                has_any_ready = any(
+                    isinstance(yc, dict) and yc.get("status") == "ready"
+                    for yc in (proj.get("year_clips") or [])
+                )
+                if not has_any_ready and repaired_info.get("recommended_years"):
+                    proj["years"] = list(repaired_info["recommended_years"])
+                    base_d = float(proj.get("year_clip_duration") or 4.5)
+                    proj["year_clips"] = [
+                        {
+                            "slot_index": s_i,
+                            "year": y_val,
+                            "requested_year": y_val,
+                            "scene_index": 1,
+                            "status": "pending",
+                            "title": f"Đang chờ xử lý năm {y_val}...",
+                            "duration_sec": base_d,
+                        }
+                        for s_i, y_val in enumerate(proj["years"])
+                    ]
+            _save_project_state(project_id)
+
     with PROJECTS_LOCK:
         proj = PROJECTS[project_id]
         celeb_name = proj["celeb_info"]["name"]

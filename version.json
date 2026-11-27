@@ -1,9 +1,9 @@
 {
-  "version": "ver 0.7",
+  "version": "ver 0.8",
   "sha": "e3809ac78efb1ee1a12124f6da742f06980b7a15",
   "short_sha": "e3809ac",
-  "message": "fix(resume): handle final_video=None when clicking Tiếp tục Chạy (ver 0.7)",
-  "date": "2026-11-27 11:18:31 +0700",
+  "message": "fix(CON-227): fix Wikipedia HTTP 429 rate-limit causing 1955-2026 & 0 reference images + auto-repair corrupted scans (ver 0.8)",
+  "date": "2026-11-27 11:55:00 +0700",
   "author": "BachVu",
   "repo": "Bach1711/MASYS-CelebTimeline",
   "branch": "main"
