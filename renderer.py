@@ -2,7 +2,8 @@ import os
 import re
 import shutil
 import subprocess
-from typing import List, Dict, Any, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import List, Dict, Any, Optional, Tuple
 from PIL import Image, ImageDraw, ImageFont
 
 from youtube_pipeline import FFMPEG_BIN, FFPROBE_BIN, get_video_duration
@@ -406,11 +407,12 @@ def render_final_timeline_video(
     os.makedirs(render_dir, exist_ok=True)
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
 
-    normalized_files: List[str] = []
     cw, ch = (1920, 1080) if layout == "landscape_16_9" else (1080, 1920)
 
-    # 1. Normalize News Intro if present and not cleared (keeps original audio + top celebrity title overlay)
-    actual_news_dur = 0.0
+    # Build list of segment normalization jobs to execute in parallel across 4 FFmpeg threads
+    # Each job: (order_idx, is_news, label_desc, src_path, dst_path, dur_sec, keep_audio, year_label, custom_overlay_png)
+    norm_jobs: List[Tuple[int, bool, str, str, str, float, bool, Optional[str], Optional[str]]] = []
+
     if (
         news_clip_info
         and news_clip_info.get("status") != "cleared"
@@ -442,37 +444,50 @@ def render_final_timeline_video(
                 layout=layout,
             )
 
-        if not normalize_segment_video(
-            news_src,
-            norm_news,
-            duration_sec=news_dur,
-            keep_audio=True,
-            year_label=None,
-            layout=layout,
-            custom_overlay_png=news_overlay_png,
-        ):
-            raise RuntimeError("Lỗi khi chuẩn hóa đoạn video Bản tin mở đầu.")
-        actual_news_dur = get_video_duration(norm_news) or news_dur
-        normalized_files.append(norm_news)
+        norm_jobs.append((0, True, "Bản tin mở đầu", news_src, norm_news, news_dur, True, None, news_overlay_png))
 
-    # 2. Normalize each Year clip (muted original audio + yellow Year overlay)
-    total_years_dur = 0.0
     for idx, yitem in enumerate(year_clips_info, start=1):
         yr = yitem["year"]
         y_src = yitem["clip_path"]
         y_dur = float(yitem.get("duration_sec") or get_video_duration(y_src) or 3.5)
         norm_y = os.path.join(render_dir, f"seg_{idx:03d}_{yr}.mp4")
-        if not normalize_segment_video(
-            y_src,
-            norm_y,
-            duration_sec=y_dur,
-            keep_audio=False,
-            year_label=str(yr),
+        norm_jobs.append((idx, False, f"năm {yr}", y_src, norm_y, y_dur, False, str(yr), None))
+
+    def _run_norm_job(job: Tuple[int, bool, str, str, str, float, bool, Optional[str], Optional[str]]) -> Tuple[int, bool, str, float]:
+        order_idx, is_news, label_desc, src_p, dst_p, d_sec, k_audio, y_lbl, ov_png = job
+        ok = normalize_segment_video(
+            src_p,
+            dst_p,
+            duration_sec=d_sec,
+            keep_audio=k_audio,
+            year_label=y_lbl,
             layout=layout,
-        ):
-            raise RuntimeError(f"Lỗi khi chuẩn hóa đoạn video năm {yr}.")
-        total_years_dur += get_video_duration(norm_y) or y_dur
-        normalized_files.append(norm_y)
+            custom_overlay_png=ov_png,
+        )
+        if not ok:
+            raise RuntimeError(f"Lỗi khi chuẩn hóa đoạn video {label_desc}.")
+        real_dur = get_video_duration(dst_p) or d_sec
+        return order_idx, is_news, dst_p, real_dur
+
+    job_results: List[Tuple[int, bool, str, float]] = []
+    ffmpeg_workers = min(4, max(1, len(norm_jobs)))
+    with ThreadPoolExecutor(max_workers=ffmpeg_workers) as pool:
+        futs = [pool.submit(_run_norm_job, jb) for jb in norm_jobs]
+        for fut in as_completed(futs):
+            job_results.append(fut.result())
+
+    # Sort strictly by chronological order_idx (0 = News Intro, 1..N = Year clips)
+    job_results.sort(key=lambda x: x[0])
+
+    normalized_files: List[str] = []
+    actual_news_dur = 0.0
+    total_years_dur = 0.0
+    for _, is_news, dst_p, real_dur in job_results:
+        normalized_files.append(dst_p)
+        if is_news:
+            actual_news_dur += real_dur
+        else:
+            total_years_dur += real_dur
 
     # 3. Concatenate all normalized segments directly into output_path (no BGM mixing)
     concat_list_path = os.path.join(render_dir, "concat_list.txt")

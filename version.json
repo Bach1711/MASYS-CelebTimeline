@@ -1,9 +1,9 @@
 {
-  "version": "ver 0.3",
-  "sha": "b00d13e71b2f47fb3543328ae991c2abd9005ca7",
-  "short_sha": "b00d13e",
-  "message": "fix(CON-224): thread-safe FaceEngine, atomic state save & safeReadJson for concurrent swap-year (ver 0.3)",
-  "date": "2026-11-26 10:16:10 +0700",
+  "version": "ver 0.4",
+  "sha": "36bdacc94fe0013a2acc8d579dd1bab2c7bb76a3",
+  "short_sha": "36bdacc",
+  "message": "feat(CON-225): 3-stage multi-threading (4-thread Wikipedia scan, 3-thread parallel year cutting with atomic video claim, 4-thread FFmpeg MP4 render) (ver 0.4)",
+  "date": "2026-11-27 10:03:28 +0700",
   "author": "BachVu",
   "repo": "Bach1711/MASYS-CelebTimeline",
   "branch": "main"

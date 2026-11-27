@@ -1056,11 +1056,14 @@ def find_and_prepare_year_clip(
     extra_forbidden_terms: Optional[List[str]] = None,
     pre_discovered_candidates: Optional[List[Dict[str, Any]]] = None,
     scene_index: int = 1,
+    claim_lock: Optional[threading.Lock] = None,
 ) -> Dict[str, Any]:
     """
     Search YouTube for `<Celeb Name> <Year>`, strictly validate that candidate videos
     actually belong to that year/era, download active sections, and verify via FaceEngine
     that the main celebrity is clearly on screen with live motion and no text overlays.
+    Thread-safe: when `claim_lock` is provided, atomically claims `video_id` in `used_video_ids`
+    before downloading so 3 concurrent worker threads never pick the same YouTube video.
     """
     if is_pipeline_cancelled():
         raise RuntimeError("PIPELINE_CANCELLED")
@@ -1068,8 +1071,39 @@ def find_and_prepare_year_clip(
     clean_celeb = _clean_person_name_for_search(celeb_name)
     current_year = datetime.datetime.now().year
     win = year_window or (year - 2, min(current_year, year + 2))
-    used_ids = used_video_ids or set()
-    forbid_yrs = forbidden_years or set()
+    used_ids = used_video_ids if used_video_ids is not None else set()
+    forbid_yrs = set(forbidden_years) if forbidden_years else set()
+
+    def _is_vid_used(v: str) -> bool:
+        if not v:
+            return False
+        if claim_lock is not None:
+            with claim_lock:
+                return v in used_ids
+        return v in used_ids
+
+    def _try_claim_vid(v: str) -> bool:
+        if not v or custom_url:
+            return True
+        if claim_lock is not None:
+            with claim_lock:
+                if v in used_ids:
+                    return False
+                used_ids.add(v)
+                return True
+        if v in used_ids:
+            return False
+        used_ids.add(v)
+        return True
+
+    def _release_vid(v: str):
+        if not v or custom_url:
+            return
+        if claim_lock is not None:
+            with claim_lock:
+                used_ids.discard(v)
+        else:
+            used_ids.discard(v)
 
     year_dir = os.path.join(project_dir, f"year_{year}")
     os.makedirs(year_dir, exist_ok=True)
@@ -1094,7 +1128,7 @@ def find_and_prepare_year_clip(
         seen: Set[str] = set()
         for pc in (pre_discovered_candidates or []):
             vid = pc.get("video_id")
-            if vid and vid not in seen and vid not in used_ids:
+            if vid and vid not in seen and not _is_vid_used(vid):
                 seen.add(vid)
                 candidates.append(dict(pc))
 
@@ -1155,120 +1189,137 @@ def find_and_prepare_year_clip(
 
     best_fallback: Optional[Dict[str, Any]] = None
     best_fallback_score = -1.0
+    claimed_by_this_call: Set[str] = set()
 
-    for cand in ordered[:5]:
-        if is_pipeline_cancelled():
-            raise RuntimeError("PIPELINE_CANCELLED")
-        vid = cand["video_id"]
-        vid_dur = float(cand.get("duration") or 90.0)
-
-        if vid_dur <= 45.0:
-            windows = [(0.0, vid_dur)]
-        elif vid_dur <= 120.0:
-            windows = [(6.0, min(50.0, vid_dur - 6.0))]
-        else:
-            w1_start = round(min(40.0, max(12.0, vid_dur * 0.20)), 1)
-            w2_start = round(min(vid_dur - 45.0, w1_start + 50.0), 1)
-            windows = [(w1_start, 50.0)]
-            if w2_start > w1_start + 20.0:
-                windows.append((w2_start, 50.0))
-            if vid_dur >= 180.0:
-                w3_start = round(min(vid_dur - 50.0, vid_dur * 0.62), 1)
-                if all(abs(w3_start - w[0]) >= 30.0 for w in windows):
-                    windows.append((w3_start, 50.0))
-
-        for w_idx, (dl_start, dl_dur) in enumerate(windows):
-            raw_path = os.path.join(year_dir, f"raw_{vid}_w{w_idx}.mp4")
-            if not download_youtube_section(cand["url"], raw_path, start_sec=dl_start, duration_sec=dl_dur, with_audio=False):
+    try:
+        for cand in ordered[:6]:
+            if is_pipeline_cancelled():
+                raise RuntimeError("PIPELINE_CANCELLED")
+            vid = cand["video_id"]
+            if not _try_claim_vid(vid):
                 continue
+            claimed_by_this_call.add(vid)
+            vid_dur = float(cand.get("duration") or 90.0)
 
-            segments = face_engine.find_best_segments(
-                raw_path,
-                clip_duration=clip_duration,
-                min_duration=min_clip_duration,
-                max_duration=max_clip_duration,
-                ref_embeddings=ref_embeddings,
-                sample_fps=2.0,
-                top_k=6,
-                skip_start_sec=0.5,
-            )
-            if not segments:
-                continue
+            if vid_dur <= 45.0:
+                windows = [(0.0, vid_dur)]
+            elif vid_dur <= 120.0:
+                windows = [(6.0, min(50.0, vid_dur - 6.0))]
+            else:
+                w1_start = round(min(40.0, max(12.0, vid_dur * 0.20)), 1)
+                w2_start = round(min(vid_dur - 45.0, w1_start + 50.0), 1)
+                windows = [(w1_start, 50.0)]
+                if w2_start > w1_start + 20.0:
+                    windows.append((w2_start, 50.0))
+                if vid_dur >= 180.0:
+                    w3_start = round(min(vid_dur - 50.0, vid_dur * 0.62), 1)
+                    if all(abs(w3_start - w[0]) >= 30.0 for w in windows):
+                        windows.append((w3_start, 50.0))
 
-            seg_idx = segment_index % len(segments)
-            chosen_seg = segments[seg_idx]
-            rel_start = float(chosen_seg["start_sec"])
-            seg_dur = float(chosen_seg.get("duration_sec") or clip_duration)
-            sim = float(chosen_seg.get("similarity", 0.0))
-            m_ratio = float(chosen_seg.get("match_ratio", 0.0))
-            f_ratio = float(chosen_seg.get("face_ratio", 0.0))
-            is_live = bool(chosen_seg.get("is_live_motion", True))
-            is_no_text = bool(chosen_seg.get("is_clean_no_text", True))
-            has_cont_celeb = bool(chosen_seg.get("has_continuous_celeb", m_ratio >= 0.78))
-            thumb_offset = float(chosen_seg.get("best_thumb_offset_sec") or (seg_dur * 0.4))
+            for w_idx, (dl_start, dl_dur) in enumerate(windows):
+                raw_path = os.path.join(year_dir, f"raw_{vid}_w{w_idx}.mp4")
+                if not download_youtube_section(cand["url"], raw_path, start_sec=dl_start, duration_sec=dl_dur, with_audio=False):
+                    continue
 
-            out_clip = os.path.join(year_dir, f"clip_{year}_{vid}_w{w_idx}_s{seg_idx}_sc{scene_index}.mp4")
-            thumb_path = os.path.join(year_dir, f"thumb_{year}_{vid}_w{w_idx}_s{seg_idx}_sc{scene_index}.jpg")
+                segments = face_engine.find_best_segments(
+                    raw_path,
+                    clip_duration=clip_duration,
+                    min_duration=min_clip_duration,
+                    max_duration=max_clip_duration,
+                    ref_embeddings=ref_embeddings,
+                    sample_fps=2.0,
+                    top_k=6,
+                    skip_start_sec=0.5,
+                )
+                if not segments:
+                    continue
 
-            if not cut_video_clip(raw_path, out_clip, start_sec=rel_start, duration_sec=seg_dur, keep_audio=False):
-                continue
+                seg_idx = segment_index % len(segments)
+                chosen_seg = segments[seg_idx]
+                rel_start = float(chosen_seg["start_sec"])
+                seg_dur = float(chosen_seg.get("duration_sec") or clip_duration)
+                sim = float(chosen_seg.get("similarity", 0.0))
+                m_ratio = float(chosen_seg.get("match_ratio", 0.0))
+                f_ratio = float(chosen_seg.get("face_ratio", 0.0))
+                is_live = bool(chosen_seg.get("is_live_motion", True))
+                is_no_text = bool(chosen_seg.get("is_clean_no_text", True))
+                has_cont_celeb = bool(chosen_seg.get("has_continuous_celeb", m_ratio >= 0.78))
+                thumb_offset = float(chosen_seg.get("best_thumb_offset_sec") or (seg_dur * 0.4))
 
-            extract_thumbnail(out_clip, thumb_path, time_sec=thumb_offset)
-            actual_dur = get_video_duration(out_clip) or seg_dur
-            display_year = int(cand.get("matched_year") or year)
+                out_clip = os.path.join(year_dir, f"clip_{year}_{vid}_w{w_idx}_s{seg_idx}_sc{scene_index}.mp4")
+                thumb_path = os.path.join(year_dir, f"thumb_{year}_{vid}_w{w_idx}_s{seg_idx}_sc{scene_index}.jpg")
 
-            result_dict = {
-                "clip_id": f"{display_year}_sc{scene_index}_{int(time.time()*100)%10000}",
-                "year": display_year,
-                "requested_year": year,
-                "scene_index": scene_index,
-                "video_id": vid,
-                "title": cand["title"],
-                "url": cand["url"],
-                "channel": cand.get("channel", ""),
-                "start_sec": round(dl_start + rel_start, 2),
-                "rel_start_sec": round(rel_start, 2),
-                "raw_offset": round(dl_start, 2),
-                "duration_sec": round(actual_dur, 2),
-                "face_score": chosen_seg.get("score", 0.0),
-                "face_similarity": sim,
-                "face_ratio": f_ratio,
-                "match_ratio": m_ratio,
-                "face_motion": chosen_seg.get("face_motion", 15.0),
-                "text_score": chosen_seg.get("text_score", 0.0),
-                "clip_path": out_clip,
-                "raw_path": raw_path,
-                "thumb_path": thumb_path,
-                "candidate_index": candidates.index(cand),
-                "segment_index": seg_idx,
-                "segments": segments,
-                "candidates": candidates[:8],
-            }
+                if not cut_video_clip(raw_path, out_clip, start_sec=rel_start, duration_sec=seg_dur, keep_audio=False):
+                    continue
 
-            is_verified_celeb = (
-                sim >= 0.34
-                and m_ratio >= 0.78
-                and f_ratio >= 0.80
-                and has_cont_celeb
-                and is_live
-                and is_no_text
-            )
-            if is_verified_celeb:
-                return result_dict
+                extract_thumbnail(out_clip, thumb_path, time_sec=thumb_offset)
+                actual_dur = get_video_duration(out_clip) or seg_dur
+                display_year = int(cand.get("matched_year") or year)
 
-            fb_quality = (
-                sim * 2.5
-                + m_ratio * 2.0
-                + (1.5 if is_live else -2.0)
-                + (1.0 if is_no_text else -1.5)
-                + (1.0 if has_cont_celeb else -1.0)
-            )
-            if fb_quality > best_fallback_score:
-                best_fallback_score = fb_quality
-                best_fallback = result_dict
+                result_dict = {
+                    "clip_id": f"{display_year}_sc{scene_index}_{int(time.time()*100)%10000}",
+                    "year": display_year,
+                    "requested_year": year,
+                    "scene_index": scene_index,
+                    "video_id": vid,
+                    "title": cand["title"],
+                    "url": cand["url"],
+                    "channel": cand.get("channel", ""),
+                    "start_sec": round(dl_start + rel_start, 2),
+                    "rel_start_sec": round(rel_start, 2),
+                    "raw_offset": round(dl_start, 2),
+                    "duration_sec": round(actual_dur, 2),
+                    "face_score": chosen_seg.get("score", 0.0),
+                    "face_similarity": sim,
+                    "face_ratio": f_ratio,
+                    "match_ratio": m_ratio,
+                    "face_motion": chosen_seg.get("face_motion", 15.0),
+                    "text_score": chosen_seg.get("text_score", 0.0),
+                    "clip_path": out_clip,
+                    "raw_path": raw_path,
+                    "thumb_path": thumb_path,
+                    "candidate_index": candidates.index(cand),
+                    "segment_index": seg_idx,
+                    "segments": segments,
+                    "candidates": candidates[:8],
+                }
 
-    if best_fallback is not None:
-        return best_fallback
+                is_verified_celeb = (
+                    sim >= 0.34
+                    and m_ratio >= 0.78
+                    and f_ratio >= 0.80
+                    and has_cont_celeb
+                    and is_live
+                    and is_no_text
+                )
+                if is_verified_celeb:
+                    for c_vid in list(claimed_by_this_call):
+                        if c_vid != vid:
+                            _release_vid(c_vid)
+                    claimed_by_this_call.clear()
+                    return result_dict
+
+                fb_quality = (
+                    sim * 2.5
+                    + m_ratio * 2.0
+                    + (1.5 if is_live else -2.0)
+                    + (1.0 if is_no_text else -1.5)
+                    + (1.0 if has_cont_celeb else -1.0)
+                )
+                if fb_quality > best_fallback_score:
+                    best_fallback_score = fb_quality
+                    best_fallback = result_dict
+
+        if best_fallback is not None:
+            chosen_fb_vid = best_fallback.get("video_id")
+            for c_vid in list(claimed_by_this_call):
+                if c_vid != chosen_fb_vid:
+                    _release_vid(c_vid)
+            claimed_by_this_call.clear()
+            return best_fallback
+    finally:
+        for c_vid in list(claimed_by_this_call):
+            _release_vid(c_vid)
 
     raise RuntimeError(f"Không thể tải và cắt video có mặt nhân vật cho năm {year}.")
 

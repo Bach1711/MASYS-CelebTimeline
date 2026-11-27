@@ -10,7 +10,8 @@ import string
 import zipfile
 import threading
 import subprocess
-from typing import Dict, Any, List, Optional, Set
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Dict, Any, List, Optional, Set, Tuple
 import requests
 from fastapi import FastAPI, HTTPException, Form, Request
 from fastapi.staticfiles import StaticFiles
@@ -459,9 +460,9 @@ def api_lookup(req: LookupRequest):
 @app.post("/api/lookup-batch")
 def api_lookup_batch(req: LookupBatchRequest):
     """
-    Scan a list of celebrity rows entered in the UI Table, disambiguate each celebrity via Wikipedia,
-    and pre-create (or reuse) a preview project + batch tabs so the user can review/approve each celebrity
-    and switch tabs freely before clicking "Tạo Video".
+    Scan a list of celebrity rows entered in the UI Table in parallel (up to 4 threads),
+    disambiguate each celebrity via Wikipedia, and pre-create (or reuse) a preview project + batch tabs
+    so the user can review/approve each celebrity and switch tabs freely before clicking "Tạo Video".
     """
     valid_items = [it for it in (req.items or []) if it.name and it.name.strip()]
     if not valid_items:
@@ -470,12 +471,9 @@ def api_lookup_batch(req: LookupBatchRequest):
     output_folder = (req.output_folder or DEFAULT_OUTPUT_DIR).strip() or DEFAULT_OUTPUT_DIR
     batch_id = req.batch_id or f"batch_{int(time.time())}_{uuid.uuid4().hex[:4]}"
     max_keep = max(25, len(valid_items) + 8)
+    _cleanup_old_projects(max_keep=max_keep)
 
-    scanned_results = []
-    batch_items = []
-    first_proj_serialized = None
-
-    for idx, it in enumerate(valid_items):
+    def _scan_single_item(idx: int, it: LookupBatchItem) -> Tuple[int, Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
         pid = None
         existing_p = _ensure_project_loaded(it.existing_project_id)
         if existing_p:
@@ -498,7 +496,7 @@ def api_lookup_batch(req: LookupBatchRequest):
                 output_folder=output_folder,
                 auto_render=False,
             )
-            pid = _create_project_record(p_req, max_keep=max_keep, initial_status="scanned")
+            pid = _create_project_record(p_req, max_keep=max_keep, initial_status="scanned", run_cleanup=False)
 
         with PROJECTS_LOCK:
             p = PROJECTS[pid]
@@ -507,8 +505,7 @@ def api_lookup_batch(req: LookupBatchRequest):
             p_pct = p.get("progress_pct", 0)
             p_msg = p.get("progress_message", "Đã quét thông tin — Sẵn sàng tạo video")
             p_fv = p.get("final_video") or {}
-            if idx == 0:
-                first_proj_serialized = _serialize_project(p)
+            p_ser = _serialize_project(p) if idx == 0 else {}
 
         local_portrait = _to_web_url(ci["reference_images"][0]) if ci.get("reference_images") else (ci.get("portrait_url") or "")
         scanned_row = {
@@ -527,24 +524,39 @@ def api_lookup_batch(req: LookupBatchRequest):
             "recommended_years": p.get("years") or ci.get("recommended_years") or [],
             "candidates": ci.get("candidates") or [],
         }
-        scanned_results.append(scanned_row)
 
-        batch_items.append(
-            {
-                "index": idx,
-                "row_index": it.row_index,
-                "name": scanned_row["name"],
-                "display_name": scanned_row["name"],
-                "wiki_title": scanned_row["wiki_title"],
-                "project_id": pid,
-                "status": p_status,
-                "progress_pct": p_pct,
-                "progress_message": p_msg,
-                "total_duration": float(p_fv.get("total_duration") or 0.0),
-                "output_path": p_fv.get("output_path") or "",
-                "error": p.get("error"),
-            }
-        )
+        b_item = {
+            "index": idx,
+            "row_index": it.row_index,
+            "name": scanned_row["name"],
+            "display_name": scanned_row["name"],
+            "wiki_title": scanned_row["wiki_title"],
+            "project_id": pid,
+            "status": p_status,
+            "progress_pct": p_pct,
+            "progress_message": p_msg,
+            "total_duration": float(p_fv.get("total_duration") or 0.0),
+            "output_path": p_fv.get("output_path") or "",
+            "error": p.get("error"),
+        }
+        return idx, scanned_row, b_item, p_ser
+
+    ordered_outputs: List[Optional[Tuple[int, Dict[str, Any], Dict[str, Any], Dict[str, Any]]]] = [None] * len(valid_items)
+    scan_workers = min(4, max(1, len(valid_items)))
+    with ThreadPoolExecutor(max_workers=scan_workers) as pool:
+        futs = [pool.submit(_scan_single_item, idx, it) for idx, it in enumerate(valid_items)]
+        for fut in as_completed(futs):
+            idx_val, s_row, b_it, p_ser = fut.result()
+            ordered_outputs[idx_val] = (idx_val, s_row, b_it, p_ser)
+
+    scanned_results = []
+    batch_items = []
+    first_proj_serialized = None
+    for idx_val, s_row, b_it, p_ser in [x for x in ordered_outputs if x is not None]:
+        scanned_results.append(s_row)
+        batch_items.append(b_it)
+        if idx_val == 0:
+            first_proj_serialized = p_ser
 
     batch_state = {
         "batch_id": batch_id,
@@ -624,9 +636,15 @@ def api_cleanup_workspace():
     return _cleanup_old_projects(max_keep=5)
 
 
-def _create_project_record(req: StartPipelineRequest, max_keep: int = 8, initial_status: str = "running") -> str:
+def _create_project_record(
+    req: StartPipelineRequest,
+    max_keep: int = 8,
+    initial_status: str = "running",
+    run_cleanup: bool = True,
+) -> str:
     project_id = f"proj_{int(time.time() * 1000)}_{uuid.uuid4().hex[:4]}"
-    _cleanup_old_projects(max_keep=max_keep, exclude_project_id=project_id)
+    if run_cleanup:
+        _cleanup_old_projects(max_keep=max_keep, exclude_project_id=project_id)
     pdir = _project_dir(project_id)
 
     celeb_info = lookup_celebrity(
@@ -1280,30 +1298,50 @@ def _run_full_pipeline_worker(project_id: str, auto_render: bool = False):
 
     tried_years.update(years)
 
-    # Step 2: Process each distinct Year clip sequentially with strict chronological window & adaptive duration
+    # Step 2: Process Year clips in PARALLEL (3 concurrent threads) with atomic video claiming & thread-local FaceEngine
     total_years = max(1, len(years))
     year_Counts_seen: Dict[int, int] = {}
-
+    planned_year_tasks: List[Tuple[int, int, Tuple[int, int], int]] = []
     for i, yr in enumerate(years):
-        if is_pipeline_cancelled():
-            with PROJECTS_LOCK:
-                PROJECTS[project_id]["status"] = "stopped"
-            _save_project_state(project_id)
-            return
-
-        pct = 18 + int((i / total_years) * 65)
         win = _compute_year_window(years, i)
         sc_idx = year_Counts_seen.get(yr, 0) + 1
         year_Counts_seen[yr] = sc_idx
+        planned_year_tasks.append((i, yr, win, sc_idx))
+
+    claim_lock = threading.Lock()
+    emb_lock = threading.Lock()
+    completed_slots_count = 0
+    all_planned_years_set = {int(y) for y in years}
+
+    def _process_year_slot(task_tuple: Tuple[int, int, Tuple[int, int], int]):
+        nonlocal completed_slots_count
+        i, yr, win, sc_idx = task_tuple
+        if is_pipeline_cancelled():
+            return
 
         with PROJECTS_LOCK:
-            PROJECTS[project_id]["progress_pct"] = pct
-            PROJECTS[project_id]["progress_message"] = (
-                f"Đang tìm & cắt video năm {yr} ({i + 1}/{total_years}) — xác thực khuôn mặt AI {celeb_name}..."
-            )
             if i < len(PROJECTS[project_id]["year_clips"]):
+                existing_slot = PROJECTS[project_id]["year_clips"][i]
+                if existing_slot.get("user_modified"):
+                    completed_slots_count += 1
+                    return
                 PROJECTS[project_id]["year_clips"][i]["status"] = "processing"
+                PROJECTS[project_id]["year_clips"][i]["title"] = f"⚡ Đang tải & lọc mặt AI năm {yr}..."
+            active_yrs = [
+                str(c.get("year"))
+                for c in PROJECTS[project_id]["year_clips"]
+                if c.get("status") == "processing"
+            ]
+            active_str = ", ".join(active_yrs[:3]) if active_yrs else str(yr)
+            PROJECTS[project_id]["progress_message"] = (
+                f"⚡ Đa luồng (3 luồng): Đang xử lý song song năm [{active_str}] ({completed_slots_count}/{total_years} hoàn tất)..."
+            )
         _save_project_state(project_id)
+
+        with claim_lock:
+            slot_forbidden = ((used_years | all_planned_years_set) - {int(yr)}) if sc_idx == 1 else None
+        with emb_lock:
+            ref_embs_snapshot = list(ref_embeddings)
 
         try:
             y_clip = find_and_prepare_year_clip(
@@ -1311,7 +1349,7 @@ def _run_full_pipeline_worker(project_id: str, auto_render: bool = False):
                 year=yr,
                 project_dir=pdir,
                 face_engine=face_engine,
-                ref_embeddings=ref_embeddings,
+                ref_embeddings=ref_embs_snapshot,
                 clip_duration=year_dur,
                 min_clip_duration=min_dur,
                 max_clip_duration=max_dur,
@@ -1319,33 +1357,46 @@ def _run_full_pipeline_worker(project_id: str, auto_render: bool = False):
                 segment_index=0,
                 year_window=win,
                 used_video_ids=used_video_ids,
-                forbidden_years=used_years if sc_idx == 1 else None,
+                forbidden_years=slot_forbidden,
                 extra_forbidden_terms=extra_forbidden,
                 pre_discovered_candidates=dated_pool.get(yr),
                 scene_index=sc_idx,
+                claim_lock=claim_lock,
             )
             y_clip["status"] = "ready"
-            if y_clip.get("video_id"):
-                used_video_ids.add(y_clip["video_id"])
-            used_years.add(int(y_clip["year"]))
+            with claim_lock:
+                if y_clip.get("video_id"):
+                    used_video_ids.add(y_clip["video_id"])
+                used_years.add(int(y_clip["year"]))
 
-            if float(y_clip.get("face_similarity", 0)) >= 0.30 and y_clip.get("thumb_path") and len(ref_embeddings) < 8:
-                extra_embs = face_engine.extract_reference_embeddings([y_clip["thumb_path"]])
-                if extra_embs:
-                    ref_embeddings.extend(extra_embs)
+            if float(y_clip.get("face_similarity", 0)) >= 0.30 and y_clip.get("thumb_path"):
+                with emb_lock:
+                    need_more_embs = len(ref_embeddings) < 8
+                if need_more_embs:
+                    extra_embs = face_engine.extract_reference_embeddings([y_clip["thumb_path"]])
+                    if extra_embs:
+                        with emb_lock:
+                            if len(ref_embeddings) < 8:
+                                ref_embeddings.extend(extra_embs[: max(1, 8 - len(ref_embeddings))])
 
             with PROJECTS_LOCK:
+                completed_slots_count += 1
+                pct = 18 + int((completed_slots_count / total_years) * 65)
+                PROJECTS[project_id]["progress_pct"] = pct
                 existing_slot = PROJECTS[project_id]["year_clips"][i] if i < len(PROJECTS[project_id]["year_clips"]) else {}
                 if not existing_slot.get("user_modified"):
                     PROJECTS[project_id]["year_clips"][i] = y_clip
                     PROJECTS[project_id]["years"][i] = int(y_clip["year"])
+                PROJECTS[project_id]["progress_message"] = (
+                    f"⚡ Đa luồng (3 luồng): Đã cắt xong năm {y_clip['year']} ({completed_slots_count}/{total_years} mốc năm)..."
+                )
         except Exception as e:
             if "PIPELINE_CANCELLED" in str(e) or is_pipeline_cancelled():
-                with PROJECTS_LOCK:
-                    PROJECTS[project_id]["status"] = "stopped"
-                _save_project_state(project_id)
                 return
             with PROJECTS_LOCK:
+                completed_slots_count += 1
+                pct = 18 + int((completed_slots_count / total_years) * 65)
+                PROJECTS[project_id]["progress_pct"] = pct
                 existing_slot = PROJECTS[project_id]["year_clips"][i] if i < len(PROJECTS[project_id]["year_clips"]) else {}
                 if not existing_slot.get("user_modified"):
                     PROJECTS[project_id]["year_clips"][i] = {
@@ -1358,6 +1409,15 @@ def _run_full_pipeline_worker(project_id: str, auto_render: bool = False):
                         "duration_sec": year_dur,
                     }
         _save_project_state(project_id)
+
+    year_workers = min(3, max(1, len(planned_year_tasks)))
+    with ThreadPoolExecutor(max_workers=year_workers) as year_pool:
+        year_futures = [year_pool.submit(_process_year_slot, t) for t in planned_year_tasks]
+        for fut in as_completed(year_futures):
+            try:
+                fut.result()
+            except Exception:
+                pass
 
     if is_pipeline_cancelled():
         with PROJECTS_LOCK:
@@ -1390,56 +1450,76 @@ def _run_full_pipeline_worker(project_id: str, auto_render: bool = False):
             and all(abs(int(ny) - uy) >= 2 for uy in used_years)
         ]
         wiki_reserve.sort(key=lambda y: int(yr_counts.get(str(y), yr_counts.get(y, 1))), reverse=True)
-        reserve_candidates = pool_unused_years + wiki_reserve
+        reserve_candidates = (pool_unused_years + wiki_reserve)[:5]
+        for ry in reserve_candidates:
+            tried_years.add(ry)
 
-        for extra_yr in reserve_candidates[:5]:
-            if is_pipeline_cancelled():
-                break
-            if len(ready_clips) >= 10 or current_total_dur >= 52.0:
-                break
-            tried_years.add(extra_yr)
+        if reserve_candidates:
             with PROJECTS_LOCK:
                 PROJECTS[project_id]["progress_pct"] = 85
                 PROJECTS[project_id]["progress_message"] = (
-                    f"Đang lấy thêm mốc năm có video thật ({extra_yr}) để đủ thời lượng ~1 phút..."
+                    f"⚡ Đa luồng: Đang lấy thêm các mốc năm dự phòng ({', '.join(str(x) for x in reserve_candidates[:3])}) để đủ thời lượng ~1 phút..."
                 )
             _save_project_state(project_id)
-            try:
-                extra_clip = find_and_prepare_year_clip(
-                    celeb_name=celeb_name,
-                    year=extra_yr,
-                    project_dir=pdir,
-                    face_engine=face_engine,
-                    ref_embeddings=ref_embeddings,
-                    clip_duration=year_dur,
-                    min_clip_duration=min_dur,
-                    max_clip_duration=max_dur,
-                    candidate_index=0,
-                    segment_index=0,
-                    year_window=(extra_yr - 1, extra_yr + 1),
-                    used_video_ids=used_video_ids,
-                    forbidden_years=used_years,
-                    extra_forbidden_terms=extra_forbidden,
-                    pre_discovered_candidates=dated_pool.get(extra_yr),
-                    scene_index=1,
-                )
-                extra_clip["status"] = "ready"
-                if extra_clip.get("video_id"):
-                    used_video_ids.add(extra_clip["video_id"])
-                used_years.add(int(extra_clip["year"]))
+
+            def _try_reserve_year(extra_yr: int):
+                if is_pipeline_cancelled():
+                    return
                 with PROJECTS_LOCK:
-                    live_ready = [c for c in PROJECTS[project_id].get("year_clips", []) if c.get("status") == "ready"]
-                    live_ready.append(extra_clip)
-                    live_ready.sort(key=lambda c: (int(c["year"]), int(c.get("scene_index", 1))))
-                    ready_clips = list(live_ready)
-                    current_total_dur = actual_news_dur + sum(float(c.get("duration_sec") or 0) for c in ready_clips)
-                    PROJECTS[project_id]["year_clips"] = list(ready_clips)
-                    PROJECTS[project_id]["years"] = [int(x["year"]) for x in ready_clips]
-                _save_project_state(project_id)
-            except Exception as e:
-                if "PIPELINE_CANCELLED" in str(e) or is_pipeline_cancelled():
-                    break
-                continue
+                    lr = [c for c in PROJECTS[project_id].get("year_clips", []) if c.get("status") == "ready"]
+                    cur_d = actual_news_dur + sum(float(c.get("duration_sec") or 0) for c in lr)
+                    if len(lr) >= 10 or cur_d >= 52.0:
+                        return
+                with claim_lock:
+                    forb_snap = set(used_years)
+                with emb_lock:
+                    embs_snap = list(ref_embeddings)
+                try:
+                    extra_clip = find_and_prepare_year_clip(
+                        celeb_name=celeb_name,
+                        year=extra_yr,
+                        project_dir=pdir,
+                        face_engine=face_engine,
+                        ref_embeddings=embs_snap,
+                        clip_duration=year_dur,
+                        min_clip_duration=min_dur,
+                        max_clip_duration=max_dur,
+                        candidate_index=0,
+                        segment_index=0,
+                        year_window=(extra_yr - 1, extra_yr + 1),
+                        used_video_ids=used_video_ids,
+                        forbidden_years=forb_snap,
+                        extra_forbidden_terms=extra_forbidden,
+                        pre_discovered_candidates=dated_pool.get(extra_yr),
+                        scene_index=1,
+                        claim_lock=claim_lock,
+                    )
+                    extra_clip["status"] = "ready"
+                    with claim_lock:
+                        if int(extra_clip["year"]) in used_years:
+                            return
+                        if extra_clip.get("video_id"):
+                            used_video_ids.add(extra_clip["video_id"])
+                        used_years.add(int(extra_clip["year"]))
+                    with PROJECTS_LOCK:
+                        live_ready = [c for c in PROJECTS[project_id].get("year_clips", []) if c.get("status") == "ready"]
+                        cur_d = actual_news_dur + sum(float(c.get("duration_sec") or 0) for c in live_ready)
+                        if len(live_ready) < 10 and cur_d < 52.0:
+                            live_ready.append(extra_clip)
+                            live_ready.sort(key=lambda c: (int(c["year"]), int(c.get("scene_index", 1))))
+                            PROJECTS[project_id]["year_clips"] = list(live_ready)
+                            PROJECTS[project_id]["years"] = [int(x["year"]) for x in live_ready]
+                    _save_project_state(project_id)
+                except Exception:
+                    return
+
+            with ThreadPoolExecutor(max_workers=min(3, len(reserve_candidates))) as res_pool:
+                res_futs = [res_pool.submit(_try_reserve_year, ry) for ry in reserve_candidates]
+                for rf in as_completed(res_futs):
+                    try:
+                        rf.result()
+                    except Exception:
+                        pass
 
     if is_pipeline_cancelled():
         with PROJECTS_LOCK:
